@@ -1,4 +1,5 @@
-@using NuGet.Services.Validation;
+@using NuGet.Services.Validation
+@using NuGet.Services.Licenses
 
 @model DisplayPackageViewModel
 @{
@@ -20,7 +21,7 @@
 
     if (Model.EmbeddedLicenseType != EmbeddedLicenseFileType.Absent)
     {
-        Model.LicenseUrl = Url.License(Model.Id, Model.Version);
+        Model.LicenseUrl = Url.License(Model);
     }
 
     if (Model.IsDotnetToolPackageType)
@@ -84,6 +85,11 @@
     <meta property="og:description" content="@Model.Description" />
     <meta property="og:determiner" content="a" />
     <meta property="og:image" content="@(PackageHelper.ShouldRenderUrl(Model.IconUrl) ? Model.IconUrl : Url.Absolute("~/Content/gallery/img/default-package-icon-256x256.png"))" />
+
+    @if (Model.IsAtomFeedEnabled)
+    {
+        <link rel="alternate" type="application/atom+xml" title="Subscribe to @Model.Id updates" href="@Url.PackageAtomFeed(Model.Id)" />
+    }
 }
 
 @helper VersionListDivider(int rowCount, bool versionsExpanded)
@@ -145,6 +151,11 @@
         }
     </div>
 }
+
+@* The following two helpers must be on a single line each so no extra whitespace is introduced in the expression when rendered. *@
+@* Helpers themselves are needed not to introduce that extra whitespce, which happens if they are inlined. *@
+@helper MakeLicenseLink(CompositeLicenseExpressionSegment segment) {<a href="@LicenseExpressionRedirectUrlHelper.GetLicenseExpressionRedirectUrl(segment.Value)">@segment.Value</a>}
+@helper MakeLicenseSpan(CompositeLicenseExpressionSegment segment) {<span>@segment.Value</span>}
 
 <section role="main" class="container main-container page-package-details">
     <div class="row">
@@ -244,6 +255,11 @@
                 )
             }
 
+            @if (Model.IsPackageDeprecationEnabled && Model.DeprecationStatus != PackageDeprecationStatus.NotDeprecated)
+            {
+                @Html.Partial("_DisplayPackageDeprecation")
+            }
+
             @if (Model.Prerelease)
             {
                 @ViewHelpers.AlertInfo(
@@ -331,7 +347,7 @@
                         @<text>
                             This package is unlisted and hidden from package listings.
                             You can see the package because you are one of its owners. To list the package again,
-                            <a href="@Url.DeletePackage(Model)">change its listing setting</a>.
+                            <a href="@Url.ManagePackage(Model)">change its listing setting</a>.
                         </text>
                     )
                 }
@@ -488,13 +504,14 @@
                 <table class="table borderless">
                     <thead>
                         <tr>
-                            <th colspan="2">Version</th>
+                            <th>Version</th>
                             <th>Downloads</th>
                             <th>Last updated</th>
                             @if (Model.CanDisplayPrivateMetadata)
                             {
                                 <th>Status</th>
                             }
+                            <th colspan="2"></th>
                         </tr>
                     </thead>
                     <tbody class="no-border">
@@ -513,12 +530,6 @@
                                 rowCount++;
                                 @VersionListDivider(rowCount, versionsExpanded)
                                 <tr class="@(packageVersion.IsCurrent(Model) ? "bg-info" : null)">
-                                    <td class="signature-info-cell">
-                                        @if (Model.IsCertificatesUIEnabled && !string.IsNullOrEmpty(packageVersion.SignatureInformation))
-                                        {
-                                            <i class="ms-Icon ms-Icon--Ribbon signature-info" title="@packageVersion.SignatureInformation"></i>
-                                        }
-                                    </td>
                                     <td>
                                         <a href="@Url.Package(packageVersion)" title="@packageVersion.FullVersion">
                                             @packageVersion.Version.Abbreviate(30)
@@ -540,20 +551,55 @@
                                     {
                                         var packageStatusSummary = packageVersion.PackageStatusSummary;
 
-                                        if (packageStatusSummary == PackageStatusSummary.Listed ||
-                                            packageStatusSummary == PackageStatusSummary.Unlisted)
-                                        {
-                                            <td>
-                                                <a href="@Url.DeletePackage(packageVersion)">@NuGetGallery.Helpers.EnumHelper.GetDescription(packageStatusSummary)</a>
-                                            </td>
-                                        }
-                                        else
-                                        {
-                                            <td>
+                                        <td>
+                                            @if (packageStatusSummary == PackageStatusSummary.Listed ||
+                                                 packageStatusSummary == PackageStatusSummary.Unlisted)
+                                            {
+                                                <a href="@Url.ManagePackage(packageVersion)">@NuGetGallery.Helpers.EnumHelper.GetDescription(packageStatusSummary)</a>
+                                            }
+                                            else
+                                            {
                                                 @NuGetGallery.Helpers.EnumHelper.GetDescription(packageStatusSummary)
-                                            </td>
-                                        }
+                                            }
+                                        </td>
                                     }
+
+                                    <td class="package-icon-cell">
+                                        @if (Model.IsCertificatesUIEnabled && !string.IsNullOrEmpty(packageVersion.SignatureInformation))
+                                        {
+                                            <i class="ms-Icon ms-Icon--Ribbon package-icon" title="@packageVersion.SignatureInformation"></i>
+                                        }
+                                    </td>
+
+                                    <td class="package-icon-cell">
+                                        @if (Model.IsPackageDeprecationEnabled && packageVersion.DeprecationStatus != PackageDeprecationStatus.NotDeprecated)
+                                        {
+                                            var deprecationTitle = packageVersion.Version;
+                                            var isVulnerable = packageVersion.DeprecationStatus.HasFlag(PackageDeprecationStatus.Vulnerable);
+                                            var isLegacy = packageVersion.DeprecationStatus.HasFlag(PackageDeprecationStatus.Legacy);
+                                            if (isVulnerable)
+                                            {
+                                                deprecationTitle += " is deprecated because it has vulnerabilities";
+
+                                                if (isLegacy)
+                                                {
+                                                    deprecationTitle += " and is legacy and is no longer maintained";
+                                                }
+
+                                                deprecationTitle += ".";
+                                            }
+                                            else if (isLegacy)
+                                            {
+                                                deprecationTitle += " is deprecated because it is legacy and is no longer maintained.";
+                                            }
+                                            else
+                                            {
+                                                deprecationTitle += " is deprecated.";
+                                            }
+
+                                            <i class="ms-Icon ms-Icon--Warning package-icon" title="@deprecationTitle"></i>
+                                        }
+                                    </td>
                                 </tr>
                             }
                             else if (packageVersion.Deleted && packageVersion.CanDisplayPrivateMetadata)
@@ -561,8 +607,8 @@
                                 rowCount++;
                                 @VersionListDivider(rowCount, versionsExpanded)
                                 <tr class="deleted">
-                                    <td class="version" colspan="2">
-                                        @packageVersion.Version (deleted)
+                                    <td class="version">
+                                        @packageVersion.Version
                                     </td>
                                     <td>
                                         @packageVersion.DownloadCount
@@ -570,7 +616,10 @@
                                     <td>
                                         <span data-datetime="@packageVersion.LastUpdated.ToString("O")">@packageVersion.LastUpdated.ToNuGetShortDateString()</span>
                                     </td>
-                                    <td></td>
+                                    <td>
+                                        Deleted
+                                    </td>
+                                    <td colspan="2"></td>
                                 </tr>
                             }
                         }
@@ -638,8 +687,25 @@
                 {
                     if (Model.EmbeddedLicenseType == EmbeddedLicenseFileType.Absent || !Model.Validating)
                     {
-                        <li>
-                            <i class="ms-Icon ms-Icon--Certificate" aria-hidden="true"></i>
+                    <li>
+                        <i class="ms-Icon ms-Icon--Certificate" aria-hidden="true"></i>
+                        @if (Model.LicenseExpressionSegments.AnySafe())
+                        {
+                            @:License:
+                            foreach (var segment in Model.LicenseExpressionSegments)
+                            {
+                                if (@ViewHelpers.IsLicenseOrException(segment))
+                                {
+                                    @MakeLicenseLink(segment);
+                                }
+                                else
+                                {
+                                    @MakeLicenseSpan(segment);
+                                }
+                            }
+                        }
+                        else
+                        {
                             <a href="@Model.LicenseUrl"
                                data-track="outbound-license-url" title="Make sure you agree with the license" rel="nofollow">
                                 @if (Model.LicenseNames.AnySafe())
@@ -651,18 +717,19 @@
                                     @:License Info
                                 }
                             </a>
-                        </li>
+                        }
+                    </li>
                     }
                 }
                 <li>
                     <i class="ms-Icon ms-Icon--Mail" aria-hidden="true"></i>
-                    <a href="@Url.ContactOwners(Model.Id, Model.Version)" title="Ask the package owners a question">Contact owners</a>
+                    <a href="@Url.ContactOwners(Model)" title="Ask the package owners a question">Contact owners</a>
                 </li>
                 @if (Model.CanReportAsOwner)
                 {
                     <li>
                         <i class="ms-Icon ms-Icon--Help" aria-hidden="true"></i>
-                        <a href="@Url.ReportPackage(Model.Id, Model.Version)" title="Contact the NuGet team for help with your package">
+                        <a href="@Url.ReportPackage(Model)" title="Contact the NuGet team for help with your package">
                             Contact support
                         </a>
                     </li>
@@ -671,7 +738,7 @@
                 {
                     <li>
                         <i class="ms-Icon ms-Icon--Flag" aria-hidden="true"></i>
-                        <a href="@Url.ReportAbuse(Model.Id, Model.Version)" title="Report the package as abusive">
+                        <a href="@Url.ReportAbuse(Model)" title="Report the package as abusive">
                             Report
                         </a>
                     </li>
@@ -698,25 +765,11 @@
                     </li>
                 }
 
-                @if ((Model.Available || Model.Validating) && Model.CanEdit)
+                @if (Model.CanEdit || Model.CanManageOwners || Model.CanUnlistOrRelist)
                 {
                     <li>
                         <i class="ms-Icon ms-Icon--Edit" aria-hidden="true"></i>
-                        <a href="@Url.EditPackage(Model.Id, Model.Version)">Edit package</a>
-                    </li>
-                }
-                @if (Model.CanManageOwners)
-                {
-                    <li>
-                        <i class="ms-Icon ms-Icon--People" aria-hidden="true"></i>
-                        <a href="@Url.ManagePackageOwners(Model)">Manage owners</a>
-                    </li>
-                }
-                @if (!Model.Deleted && Model.CanUnlistOrRelist)
-                {
-                    <li>
-                        <i class="ms-Icon ms-Icon--Delete" aria-hidden="true"></i>
-                        <a href="@Url.DeletePackage(Model)" class="delete">Delete package</a>
+                        <a href="@Url.ManagePackage(Model)">Manage package</a>
                     </li>
                 }
                 @if (!Model.Deleted && hasSymbolsPackageAvailable && Model.CanDeleteSymbolsPackage)
@@ -772,8 +825,8 @@
                 </li>
                 <li>
                     <i class="ms-Icon ms-Icon--Giftbox" aria-hidden="true"></i>
-                    @Model.PackageVersions.First().DownloadCount.ToNuGetNumberString() @(Model.PackageVersions.First().DownloadCount == 1 ? "download" : "downloads")
-                    of latest version
+                    @Model.DownloadCount.ToNuGetNumberString() @(Model.DownloadCount == 1 ? "download" : "downloads")
+                    of current version
                 </li>
                 <li>
                     <i class="ms-Icon ms-Icon--Financial" aria-hidden="true"></i>
@@ -850,6 +903,14 @@ foreach (var owner in Model.Owners)
                              src="@Url.Absolute("~/Content/gallery/img/twitter.svg")"
                              @ViewHelpers.ImageFallback(Url.Absolute("~/Content/gallery/img/twitter-24x24.png")) />
                     </a>
+                    @if (Model.IsAtomFeedEnabled)
+                    {
+                        <a href="@Url.PackageAtomFeed(Model.Id)" data-track="atom-feed">
+                            <img width="24" height="24" alt="Use the Atom feed to subscribe to new versions of @Model.Id"
+                                 src="@Url.Absolute("~/Content/gallery/img/rss.svg")"
+                                 @ViewHelpers.ImageFallback(Url.Absolute("~/Content/gallery/img/rss-24x24.png")) />
+                        </a>
+                    }
                 </p>
             }
         </aside>

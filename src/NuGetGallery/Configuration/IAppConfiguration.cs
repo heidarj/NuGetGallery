@@ -66,6 +66,11 @@ namespace NuGetGallery.Configuration
         string AzureStorage_Packages_ConnectionString { get; set; }
 
         /// <summary>
+        /// The Azure Storage connection string used for flatContainer, after upload.
+        /// </summary>
+        string AzureStorage_FlatContainer_ConnectionString { get; set; }
+
+        /// <summary>
         /// The Azure Storage connection string used for statistics.
         /// </summary>
         string AzureStorage_Statistics_ConnectionString { get; set; }
@@ -84,6 +89,11 @@ namespace NuGetGallery.Configuration
         /// Gets a setting if Read Access Geo Redundant is enabled in azure storage
         /// </summary>
         bool AzureStorageReadAccessGeoRedundant { get; set; }
+
+        /// <summary>
+        /// How frequently the feature flags should be refreshed.
+        /// </summary>
+        TimeSpan FeatureFlagsRefreshInterval { get; set; }
 
         /// <summary>
         /// Gets a boolean indicating whether asynchronous package validation is enabled.
@@ -380,5 +390,35 @@ namespace NuGetGallery.Configuration
         /// no embedded license) are allowed into Gallery.
         /// </summary>
         bool AllowLicenselessPackages { get; set; }
+
+        /// <summary>
+        /// The Uri for the Primary Search endpoint
+        /// </summary>
+        Uri SearchServiceUriPrimary { get; set; }
+
+        /// <summary>
+        /// The Uri for the Secondary Search endpoint
+        /// </summary>
+        Uri SearchServiceUriSecondary { get; set; }
+
+        /// <summary>
+        /// The time in seconds for the circuit breaker delay. (The time the circuit breaker will stay in open state)
+        /// </summary>
+        int SearchCircuitBreakerDelayInSeconds { get; set; }
+
+        /// <summary>
+        /// The wait time in milliseconds for the WaitAndRetry policy.
+        /// </summary>
+        int SearchCircuitBreakerWaitAndRetryIntervalInMilliseconds { get; set; }
+
+        /// <summary>
+        /// A request will fail after this number of retries. In total a request will fail after this number of retries + 1.
+        /// </summary>
+        int SearchCircuitBreakerWaitAndRetryCount { get; set; }
+
+        /// <summary>
+        /// CircuitBreaker will open after this number of consecutive failed requests.
+        /// </summary>
+        int SearchCircuitBreakerBreakAfterCount { get; set; }
     }
 }

@@ -53,7 +53,6 @@
     <Reference Include="System.Configuration" />
     <Reference Include="System.Core" />
     <Reference Include="System.Data.Services.Client" />
-    <Reference Include="System.IO.Compression" />
     <Reference Include="System.Web" />
     <Reference Include="System.Xml.Linq" />
     <Reference Include="System.Data.DataSetExtensions" />
@@ -134,6 +133,12 @@
     <Compile Include="Extensions\StorageExceptionExtensions.cs" />
     <Compile Include="Extensions\UserExtensionsCore.cs" />
     <Compile Include="Extensions\ValidationIssueExtensions.cs" />
+    <Compile Include="Features\FeatureFlagFileStorageService.cs" />
+    <Compile Include="Features\FeatureFlagClientExtensions.cs" />
+    <Compile Include="Features\FeatureFlagReference.cs" />
+    <Compile Include="Features\FeatureFlagSaveResult.cs" />
+    <Compile Include="Features\FeatureFlagSaveResultType.cs" />
+    <Compile Include="Features\IEditableFeatureFlagStorageService.cs" />
     <Compile Include="ICloudStorageStatusDependency.cs" />
     <Compile Include="Infrastructure\AzureEntityList.cs" />
     <Compile Include="Infrastructure\ElmahException.cs" />
@@ -149,9 +154,7 @@
     <Compile Include="PackageMetadataExtensions.cs" />
     <Compile Include="PackageReaderCoreExtensions.cs" />
     <Compile Include="Packaging\InvalidPackageException.cs" />
-    <Compile Include="Packaging\ManifestEdit.cs" />
     <Compile Include="Packaging\ManifestValidator.cs" />
-    <Compile Include="Packaging\NupkgRewriter.cs" />
     <Compile Include="Packaging\PackageIdValidator.cs" />
     <Compile Include="Packaging\PackageMetadata.cs" />
     <Compile Include="Packaging\PackageMetadataStrings.cs" />
@@ -188,6 +191,7 @@
     <Compile Include="Services\IFileMetadataService.cs" />
     <Compile Include="Services\IRevalidationStateService.cs" />
     <Compile Include="Services\ISimpleCloudBlob.cs" />
+    <Compile Include="Services\PackageDeprecationFieldsToInclude.cs" />
     <Compile Include="Services\SymbolPackageFileServiceMetadata.cs" />
     <Compile Include="Services\PackageFileServiceMetadata.cs" />
     <Compile Include="Services\RevalidationState.cs" />
@@ -216,16 +220,19 @@
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="NuGet.Services.Entities">
-      <Version>2.40.0</Version>
+      <Version>2.43.0</Version>
+    </PackageReference>
+    <PackageReference Include="NuGet.Services.FeatureFlags">
+      <Version>2.43.0</Version>
     </PackageReference>
     <PackageReference Include="NuGet.Services.Messaging.Email">
-      <Version>2.40.0</Version>
+      <Version>2.43.0</Version>
     </PackageReference>
     <PackageReference Include="NuGet.Services.Validation">
-      <Version>2.40.0</Version>
+      <Version>2.43.0</Version>
     </PackageReference>
     <PackageReference Include="NuGet.Services.Validation.Issues">
-      <Version>2.40.0</Version>
+      <Version>2.43.0</Version>
     </PackageReference>
     <PackageReference Include="NuGet.StrongName.AnglicanGeek.MarkdownMailer">
       <Version>1.2.0</Version>
@@ -264,7 +271,12 @@
       <Version>7.1.2</Version>
     </PackageReference>
   </ItemGroup>
-  <ItemGroup />
+  <ItemGroup>
+    <ProjectReference Include="..\NuGet.Services.Entities\NuGet.Services.Entities.csproj">
+      <Project>{6262f4fc-29be-4226-b676-db391c89d396}</Project>
+      <Name>NuGet.Services.Entities</Name>
+    </ProjectReference>
+  </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <PropertyGroup>
     <SignPath>..\..\build</SignPath>

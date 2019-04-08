@@ -53,6 +53,9 @@ namespace NuGetGallery.Configuration
         [DisplayName("AzureStorage.Packages.ConnectionString")]
         public string AzureStorage_Packages_ConnectionString { get; set; }
 
+        [DisplayName("AzureStorage.FlatContainer.ConnectionString")]
+        public string AzureStorage_FlatContainer_ConnectionString { get; set; }
+
         [DisplayName("AzureStorage.Statistics.ConnectionString")]
         public string AzureStorage_Statistics_ConnectionString { get; set; }
 
@@ -66,6 +69,8 @@ namespace NuGetGallery.Configuration
         /// Gets a setting if Read Access Geo Redundant is enabled in azure storage
         /// </summary>
         public bool AzureStorageReadAccessGeoRedundant { get; set; }
+
+        public TimeSpan FeatureFlagsRefreshInterval { get; set; }
 
         public bool AsynchronousPackageValidationEnabled { get; set; }
 
@@ -362,5 +367,31 @@ namespace NuGetGallery.Configuration
 
         [DefaultValue(true)]
         public bool AllowLicenselessPackages { get; set; }
+
+        /// <summary>
+        /// The Uri for the Primary Search endpoint
+        /// </summary>
+        public Uri SearchServiceUriPrimary { get; set; }
+
+        /// <summary>
+        /// The Uri for the Secondary Search endpoint
+        /// </summary>
+        public Uri SearchServiceUriSecondary { get; set; }
+
+        [DefaultValue(600)]
+        public int SearchCircuitBreakerDelayInSeconds { get; set; }
+
+        // The default value was chosen to have searchRetryCount*retryInterval to be close to 1 second in order to keep the user still engaged.
+        // https://www.nngroup.com/articles/website-response-times/
+        [DefaultValue(500)]
+        public int SearchCircuitBreakerWaitAndRetryIntervalInMilliseconds { get; set; }
+
+        [DefaultValue(3)]
+        public int SearchCircuitBreakerWaitAndRetryCount { get; set; }
+
+        // Default value was chosen using the AI data.
+        // It is the average of the search request count per second during the last 90 days.
+        [DefaultValue(200)]
+        public int SearchCircuitBreakerBreakAfterCount { get; set; }
     }
 }

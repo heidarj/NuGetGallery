@@ -77,10 +77,22 @@
     <Compile Include="Authentication\AuthenticationServiceFacts.cs" />
     <Compile Include="Authentication\Providers\CommonAuth\AzureActiveDirectoryV2AuthenticatorFacts.cs" />
     <Compile Include="Authentication\TestCredentialHelper.cs" />
+    <Compile Include="AutocompleteServiceQueryFacts.cs" />
+    <Compile Include="Controllers\ManageDeprecationJsonApiControllerFacts.cs" />
+    <Compile Include="Queries\CweQueryStringValidatorFacts.cs" />
+    <Compile Include="Queries\CweIdHelperFacts.cs" />
+    <Compile Include="Queries\AutocompleteCveIdsQueryFacts.cs" />
     <Compile Include="Configuration\ConfigurationServiceFacts.cs" />
     <Compile Include="Controllers\AccountsControllerFacts.cs" />
     <Compile Include="Controllers\OrganizationsControllerFacts.cs" />
     <Compile Include="Controllers\SupportControllerFacts.cs" />
+    <Compile Include="Infrastructure\Lucene\SearchPolicyFacts.cs" />
+    <Compile Include="Infrastructure\Lucene\ResilientSearchServiceFacts.cs" />
+    <Compile Include="Infrastructure\Lucene\GallerySearchServiceFacts.cs" />
+    <Compile Include="Helpers\StreamHelperFacts.cs" />
+    <Compile Include="Queries\AutocompleteCweIdsQueryFacts.cs" />
+    <Compile Include="Services\PackageDeprecationServiceFacts.cs" />
+    <Compile Include="UsernameValidationRegex.cs" />
     <Compile Include="Extensions\NumberExtensionsFacts.cs" />
     <Compile Include="Extensions\RouteExtensionsFacts.cs" />
     <Compile Include="Filters\UIAuthorizeAttributeFacts.cs" />
@@ -175,7 +187,6 @@
     <Compile Include="Services\SymbolPackageServiceFacts.cs" />
     <Compile Include="Services\PermissionsHelpersFacts.cs" />
     <Compile Include="Services\ReadMeServiceFacts.cs" />
-    <Compile Include="Services\FlatContainerServiceFacts.cs" />
     <Compile Include="Infrastructure\UserAuditRecordFacts.cs" />
     <Compile Include="OData\Filter\ODataFilterFacts.cs" />
     <Compile Include="OData\SearchService\SearchHijackerFacts.cs" />
@@ -252,7 +263,6 @@
     <Compile Include="Services\UserServiceFacts.cs" />
     <Compile Include="Services\FeedServiceFacts.cs" />
     <Compile Include="TestUtils\ContractAssert.cs" />
-    <Compile Include="TestUtils\FakeDbSet.cs" />
     <Compile Include="TestUtils\FakeEntitiesContext.cs" />
     <Compile Include="TestUtils\MockExtensions.cs" />
     <Compile Include="TestUtils\MockHandler.cs" />
@@ -267,6 +277,7 @@
     <Compile Include="UriExtensionsFacts.cs" />
     <Compile Include="UrlHelperExtensionsFacts.cs" />
     <Compile Include="ViewModels\DependencySetsViewModelFacts.cs" />
+    <Compile Include="ViewModels\DisplayLicenseViewModelFacts.cs" />
     <Compile Include="ViewModels\DisplayPackageViewModelFacts.cs" />
     <Compile Include="ViewModels\ListCertificateItemViewModelFacts.cs" />
     <Compile Include="ViewModels\ListPackageItemRequiredSignerViewModelFacts.cs" />
@@ -291,6 +302,10 @@
     <ProjectReference Include="..\..\src\NuGet.Services.Search.Client\NuGet.Services.Search.Client.csproj">
       <Project>{6931c2ee-e081-4518-9798-d34d83b35bf6}</Project>
       <Name>NuGet.Services.Search.Client</Name>
+    </ProjectReference>
+    <ProjectReference Include="..\..\src\NuGet.Services.Entities\NuGet.Services.Entities.csproj">
+      <Project>{6262f4fc-29be-4226-b676-db391c89d396}</Project>
+      <Name>NuGet.Services.Entities</Name>
     </ProjectReference>
     <ProjectReference Include="..\..\src\NuGetGallery.Core\NuGetGallery.Core.csproj">
       <Project>{097b2cdd-9623-4c34-93c2-d373d51f5b4e}</Project>
