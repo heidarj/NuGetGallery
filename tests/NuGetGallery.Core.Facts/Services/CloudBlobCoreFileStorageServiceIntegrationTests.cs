@@ -5,6 +5,7 @@ using System;
 using System.Collections.Concurrent;
 using System.IO;
 using System.Net;
+using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -55,8 +56,174 @@ namespace NuGetGallery
             _blobClientA = CloudStorageAccount.Parse(_fixture.ConnectionStringA).CreateCloudBlobClient();
             _blobClientB = CloudStorageAccount.Parse(_fixture.ConnectionStringB).CreateCloudBlobClient();
 
-            _targetA = new CloudBlobCoreFileStorageService(_clientA, Mock.Of<IDiagnosticsService>());
-            _targetB = new CloudBlobCoreFileStorageService(_clientB, Mock.Of<IDiagnosticsService>());
+            var folderInformationProvider = new GalleryCloudBlobContainerInformationProvider();
+
+            _targetA = new CloudBlobCoreFileStorageService(_clientA, Mock.Of<IDiagnosticsService>(), folderInformationProvider);
+            _targetB = new CloudBlobCoreFileStorageService(_clientB, Mock.Of<IDiagnosticsService>(), folderInformationProvider);
+        }
+
+        [BlobStorageFact]
+        public async Task AllowsDefaultRequestOptionsToBeSet()
+        {
+            // Arrange
+            var folderName = CoreConstants.Folders.ValidationFolderName;
+            var fileName = _prefixA;
+            await _targetA.SaveFileAsync(
+                folderName,
+                fileName,
+                new MemoryStream(new byte[1024 * 1024]),
+                overwrite: false);
+            var client = new CloudBlobClientWrapper(
+                _fixture.ConnectionStringA,
+                new BlobRequestOptions
+                {
+                    MaximumExecutionTime = TimeSpan.FromMilliseconds(1),
+                });
+            var container = client.GetContainerReference(folderName);
+            var file = container.GetBlobReference(fileName);
+            var destination = new MemoryStream();
+
+            // Act & Assert
+            // This should throw due to timeout.
+            var ex = await Assert.ThrowsAsync<StorageException>(() => file.DownloadToStreamAsync(destination));
+            Assert.Contains("timeout", ex.Message);
+        }
+
+        [BlobStorageFact]
+        public async Task OpenWriteAsyncReturnsWritableStream()
+        {
+            // Arrange
+            var folderName = CoreConstants.Folders.ValidationFolderName;
+            var fileName = _prefixA;
+            var expectedContent = "Hello, world.";
+            var bytes = Encoding.UTF8.GetBytes(expectedContent);
+            string expectedContentMD5;
+            using (var md5 = MD5.Create())
+            {
+                expectedContentMD5 = Convert.ToBase64String(md5.ComputeHash(bytes));
+            }
+
+            var container = _clientA.GetContainerReference(folderName);
+            var file = container.GetBlobReference(fileName);
+
+            // Act
+            using (var stream = await file.OpenWriteAsync(accessCondition: null))
+            {
+                await stream.WriteAsync(bytes, 0, bytes.Length);
+            }
+
+            // Assert
+            // Reinitialize the blob to verify the metadata is fresh.
+            file = container.GetBlobReference(fileName);
+            using (var memoryStream = new MemoryStream())
+            {
+                await file.DownloadToStreamAsync(memoryStream);
+                var actualContent = Encoding.ASCII.GetString(memoryStream.ToArray());
+                Assert.Equal(expectedContent, actualContent);
+
+                Assert.NotNull(file.ETag);
+                Assert.NotEmpty(file.ETag);
+                Assert.Equal(expectedContentMD5, file.Properties.ContentMD5);
+            }
+        }
+
+        [BlobStorageFact]
+        public async Task UpdateBlobMetadataWithSha512()
+        {
+            // Arrange
+            var folderName = CoreConstants.Folders.ValidationFolderName;
+            var fileName = _prefixA;
+            var expectedContent = "Hello, world.";
+            var expectedSha512 = "AD0C37C31D69B315F3A81F13C8CDE701094AD91725BA1B0DC3199CA9713661B8280" +
+                "D6EF7E68F133E6211E2E5A9A3150445D76F1708E04521B0EE034F0B0BAF26";
+            var bytes = Encoding.UTF8.GetBytes(expectedContent);
+
+            var container = _clientA.GetContainerReference(folderName);
+            var file = container.GetBlobReference(fileName);
+
+            // Act
+            using (var stream = await file.OpenWriteAsync(accessCondition: null))
+            {
+                await stream.WriteAsync(bytes, 0, bytes.Length);
+            }
+
+            await _targetA.SetMetadataAsync(folderName, fileName, (lazyStream, metadata) =>
+                {
+                    metadata[CoreConstants.Sha512HashAlgorithmId] = expectedSha512;
+                    return Task.FromResult(true);
+                });
+
+            // Assert
+            await file.FetchAttributesAsync();
+
+            Assert.NotNull(file.Metadata[CoreConstants.Sha512HashAlgorithmId]);
+            Assert.Equal(expectedSha512, file.Metadata[CoreConstants.Sha512HashAlgorithmId]);
+        }
+
+        [BlobStorageFact]
+        public async Task OpenWriteAsyncRejectsETagMismatchFoundBeforeUploadStarts()
+        {
+            // Arrange
+            var folderName = CoreConstants.Folders.ValidationFolderName;
+            var fileName = _prefixA;
+            var expectedContent = "Hello, world.";
+
+            await _targetA.SaveFileAsync(
+                folderName,
+                fileName,
+                new MemoryStream(Encoding.ASCII.GetBytes(expectedContent)),
+                overwrite: false);
+
+            var container = _clientA.GetContainerReference(folderName);
+            var file = container.GetBlobReference(fileName);
+
+            // Act & Assert
+            var ex = await Assert.ThrowsAsync<StorageException>(
+                async () =>
+                {
+                    using (var stream = await file.OpenWriteAsync(AccessCondition.GenerateIfNotExistsCondition()))
+                    {
+                        await stream.WriteAsync(new byte[0], 0, 0);
+                    }
+                });
+            Assert.Equal(HttpStatusCode.Conflict, (HttpStatusCode)ex.RequestInformation.HttpStatusCode);
+        }
+
+        [BlobStorageFact]
+        public async Task OpenWriteAsyncRejectsETagMismatchFoundAfterUploadStarts()
+        {
+            // Arrange
+            var folderName = CoreConstants.Folders.ValidationFolderName;
+            var fileName = _prefixA;
+            var expectedContent = "Hello, world.";
+
+            var container = _clientA.GetContainerReference(folderName);
+            var file = container.GetBlobReference(fileName);
+            var writeCount = 0;
+
+            // Act & Assert
+            var ex = await Assert.ThrowsAsync<StorageException>(
+                async () =>
+                {
+                    using (var stream = await file.OpenWriteAsync(AccessCondition.GenerateIfNotExistsCondition()))
+                    {
+                        stream.Write(new byte[1], 0, 1);
+                        await stream.FlushAsync();
+                        writeCount++;
+
+                        await _targetA.SaveFileAsync(
+                            folderName,
+                            fileName,
+                            new MemoryStream(Encoding.ASCII.GetBytes(expectedContent)),
+                            overwrite: false);
+
+                        stream.Write(new byte[1], 0, 1);
+                        await stream.FlushAsync();
+                        writeCount++;
+                    }
+                });
+            Assert.Equal(HttpStatusCode.Conflict, (HttpStatusCode)ex.RequestInformation.HttpStatusCode);
+            Assert.Equal(2, writeCount);
         }
 
         [BlobStorageFact]
@@ -333,6 +500,8 @@ namespace NuGetGallery
             var srcFolderName = CoreConstants.Folders.ValidationFolderName;
             var srcFileName = $"{_prefixA}/src";
             var srcContent = "Hello, world.";
+            var srcSha512 = "AD0C37C31D69B315F3A81F13C8CDE701094AD91725BA1B0DC3199CA9713661B8280" +
+                "D6EF7E68F133E6211E2E5A9A3150445D76F1708E04521B0EE034F0B0BAF26";
 
             var destFolderName = CoreConstants.Folders.PackagesFolderName;
             var destFileName = $"{_prefixB}/dest";
@@ -343,11 +512,23 @@ namespace NuGetGallery
                 new MemoryStream(Encoding.ASCII.GetBytes(srcContent)),
                 overwrite: false);
 
+            await _targetA.SetMetadataAsync(srcFolderName, srcFileName, (lazyStream, metadata) =>
+            {
+                metadata[CoreConstants.Sha512HashAlgorithmId] = srcSha512;
+                return Task.FromResult(true);
+            });
+
             await _targetB.SaveFileAsync(
                 destFolderName,
                 destFileName,
                 new MemoryStream(Encoding.ASCII.GetBytes(srcContent)),
                 overwrite: false);
+
+            await _targetB.SetMetadataAsync(destFolderName, destFileName, (lazyStream, metadata) =>
+            {
+                metadata[CoreConstants.Sha512HashAlgorithmId] = srcSha512;
+                return Task.FromResult(true);
+            });
 
             var originalDestFileReference = await _targetB.GetFileReferenceAsync(destFolderName, destFileName);
             var originalDestETag = originalDestFileReference.ContentId;
@@ -379,6 +560,8 @@ namespace NuGetGallery
             var srcFolderName = CoreConstants.Folders.ValidationFolderName;
             var srcFileName = $"{_prefixA}/src";
             var srcContent = "Hello, world.";
+            var srcSha512 = "AD0C37C31D69B315F3A81F13C8CDE701094AD91725BA1B0DC3199CA9713661B8280" +
+                "D6EF7E68F133E6211E2E5A9A3150445D76F1708E04521B0EE034F0B0BAF26";
 
             var destFolderName = CoreConstants.Folders.PackagesFolderName;
             var destFileName = $"{_prefixB}/dest";
@@ -389,6 +572,12 @@ namespace NuGetGallery
                 new MemoryStream(Encoding.ASCII.GetBytes(srcContent)),
                 overwrite: false);
 
+            await _targetA.SetMetadataAsync(srcFolderName, srcFileName, (lazyStream, metadata) =>
+            {
+                metadata[CoreConstants.Sha512HashAlgorithmId] = srcSha512;
+                return Task.FromResult(true);
+            });
+
             await _targetB.SaveFileAsync(
                 destFolderName,
                 destFileName,
@@ -397,8 +586,6 @@ namespace NuGetGallery
 
             var originalDestFileReference = await _targetB.GetFileReferenceAsync(destFolderName, destFileName);
             var originalDestETag = originalDestFileReference.ContentId;
-
-            await ClearContentMD5(_blobClientB, destFolderName, destFileName);
 
             var srcUri = await _targetA.GetFileReadUriAsync(
                 srcFolderName,
@@ -423,14 +610,6 @@ namespace NuGetGallery
         private static CloudBlockBlob GetBlob(CloudBlobClient blobClient, string folderName, string fileName)
         {
             return blobClient.GetContainerReference(folderName).GetBlockBlobReference(fileName);
-        }
-
-        private async Task ClearContentMD5(CloudBlobClient blobClient, string folderName, string fileName)
-        {
-            var blob = GetBlob(blobClient, folderName, fileName);
-            await blob.FetchAttributesAsync();
-            blob.Properties.ContentMD5 = null;
-            await blob.SetPropertiesAsync();
         }
 
         private static async Task CopyFileWorksAsync(

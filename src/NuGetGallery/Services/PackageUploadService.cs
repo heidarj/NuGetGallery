@@ -13,11 +13,13 @@ using System.Xml.Linq;
 using NuGet.Packaging;
 using NuGet.Packaging.Licenses;
 using NuGet.Services.Entities;
+using NuGet.Services.Validation;
 using NuGet.Versioning;
 using NuGetGallery.Configuration;
 using NuGetGallery.Diagnostics;
 using NuGetGallery.Helpers;
 using NuGetGallery.Packaging;
+using NuGetGallery.Services;
 
 namespace NuGetGallery
 {
@@ -28,6 +30,13 @@ namespace NuGetGallery
             "",
             ".txt",
             ".md",
+        };
+
+        private static readonly IReadOnlyCollection<string> AllowedIconFileExtensions = new HashSet<string>
+        {
+            ".jpg",
+            ".jpeg",
+            ".png"
         };
 
         private static readonly IReadOnlyCollection<string> AllowedLicenseTypes = new HashSet<string>
@@ -45,8 +54,10 @@ namespace NuGetGallery
         /// during the package validation.
         /// </remarks>
         private const long MaxAllowedLicenseLengthForUploading = 1024 * 1024; // 1 MB
+        private const long MaxAllowedIconLengthForUploading = 1024 * 1024; // 1 MB
         private const int MaxAllowedLicenseNodeValueLength = 500;
         private const string LicenseNodeName = "license";
+        private const string IconNodeName = "icon";
         private const string AllowedLicenseVersion = "1.0.0";
         private const string Unlicensed = "UNLICENSED";
 
@@ -60,6 +71,7 @@ namespace NuGetGallery
         private readonly ITelemetryService _telemetryService;
         private readonly ICoreLicenseFileService _coreLicenseFileService;
         private readonly IDiagnosticsSource _trace;
+        private readonly IFeatureFlagService _featureFlagService;
 
         public PackageUploadService(
             IPackageService packageService,
@@ -71,7 +83,8 @@ namespace NuGetGallery
             ITyposquattingService typosquattingService,
             ITelemetryService telemetryService,
             ICoreLicenseFileService coreLicenseFileService,
-            IDiagnosticsService diagnosticsService)
+            IDiagnosticsService diagnosticsService,
+            IFeatureFlagService featureFlagService)
         {
             _packageService = packageService ?? throw new ArgumentNullException(nameof(packageService));
             _packageFileService = packageFileService ?? throw new ArgumentNullException(nameof(packageFileService));
@@ -87,9 +100,13 @@ namespace NuGetGallery
                 throw new ArgumentNullException(nameof(diagnosticsService));
             }
             _trace = diagnosticsService.GetSource(nameof(PackageUploadService));
+            _featureFlagService = featureFlagService ?? throw new ArgumentNullException(nameof(featureFlagService));
         }
 
-        public async Task<PackageValidationResult> ValidateBeforeGeneratePackageAsync(PackageArchiveReader nuGetPackage, PackageMetadata packageMetadata)
+        public async Task<PackageValidationResult> ValidateBeforeGeneratePackageAsync(
+            PackageArchiveReader nuGetPackage,
+            PackageMetadata packageMetadata,
+            User currentUser)
         {
             var warnings = new List<IValidationMessage>();
 
@@ -98,6 +115,15 @@ namespace NuGetGallery
             if (result != null)
             {
                 return result;
+            }
+
+            var nuspecFileEntry = nuGetPackage.GetEntry(nuGetPackage.GetNuspecFile());
+            using (var nuspecFileStream = await nuGetPackage.GetNuspecAsync(CancellationToken.None))
+            {
+                if (!await IsStreamLengthMatchesReportedAsync(nuspecFileStream, nuspecFileEntry.Length))
+                {
+                    return PackageValidationResult.Invalid(Strings.UploadPackage_CorruptNupkg);
+                }
             }
 
             result = await CheckForUnsignedPushAfterAuthorSignedAsync(
@@ -116,33 +142,31 @@ namespace NuGetGallery
                 return result;
             }
 
-            result = await CheckLicenseMetadataAsync(nuGetPackage, warnings);
+            result = await CheckLicenseMetadataAsync(nuGetPackage, warnings, currentUser);
             if (result != null)
             {
                 _telemetryService.TrackLicenseValidationFailure();
                 return result;
             }
 
+            result = await CheckIconMetadataAsync(nuGetPackage, warnings, currentUser);
+            if (result != null)
+            {
+                //_telemetryService.TrackIconValidationFailure();
+                return result;
+            }
+
             return PackageValidationResult.AcceptedWithWarnings(warnings);
         }
 
-        private async Task<PackageValidationResult> CheckLicenseMetadataAsync(PackageArchiveReader nuGetPackage, List<IValidationMessage> warnings)
+        private async Task<PackageValidationResult> CheckLicenseMetadataAsync(PackageArchiveReader nuGetPackage, List<IValidationMessage> warnings, User user)
         {
-            LicenseCheckingNuspecReader nuspecReader = null;
-            using (var nuspec = nuGetPackage.GetNuspec())
-            {
-                nuspecReader = new LicenseCheckingNuspecReader(nuspec);
-            }
+            var nuspecReader = GetNuspecReader(nuGetPackage);
 
             var licenseElement = nuspecReader.LicenseElement;
 
             if (licenseElement != null)
             {
-                if (_config.RejectPackagesWithLicense)
-                {
-                    return PackageValidationResult.Invalid(Strings.UploadPackage_NotAcceptingPackagesWithLicense);
-                }
-
                 if (licenseElement.Value.Length > MaxAllowedLicenseNodeValueLength)
                 {
                     return PackageValidationResult.Invalid(Strings.UploadPackage_LicenseNodeValueTooLong);
@@ -150,7 +174,7 @@ namespace NuGetGallery
 
                 if (HasChildElements(licenseElement))
                 {
-                    return PackageValidationResult.Invalid(Strings.UploadPackage_LicenseNodeContainsChildren);
+                    return PackageValidationResult.Invalid(string.Format(Strings.UploadPackage_NodeContainsChildren, LicenseNodeName));
                 }
 
                 var typeText = GetLicenseType(licenseElement);
@@ -225,7 +249,7 @@ namespace NuGetGallery
                 {
                     return PackageValidationResult.Invalid(new InvalidUrlEncodingForLicenseUrlValidationMessage());
                 }
-                
+
                 if (licenseMetadata.Type == LicenseType.File)
                 {
                     return PackageValidationResult.Invalid(
@@ -251,12 +275,12 @@ namespace NuGetGallery
                 }
 
                 // check if specified file is present in the package
-                var fileList = new HashSet<string>(nuGetPackage.GetFiles());
-                if (!fileList.Contains(licenseFilename))
+                if (!FileExists(nuGetPackage, licenseFilename))
                 {
                     return PackageValidationResult.Invalid(
                         string.Format(
-                            Strings.UploadPackage_LicenseFileDoesNotExist,
+                            Strings.UploadPackage_FileDoesNotExist,
+                            Strings.UploadPackage_LicenseFileType,
                             licenseFilename));
                 }
 
@@ -276,16 +300,14 @@ namespace NuGetGallery
                 {
                     return PackageValidationResult.Invalid(
                         string.Format(
-                            Strings.UploadPackage_LicenseFileTooLong,
+                            Strings.UploadPackage_FileTooLong,
+                            Strings.UploadPackage_LicenseFileType,
                             MaxAllowedLicenseLengthForUploading.ToUserFriendlyBytesLabel()));
                 }
 
-                using (var licenseFileStream = nuGetPackage.GetStream(licenseFilename))
+                if (!await IsStreamLengthMatchesReportedAsync(nuGetPackage, licenseFilename, licenseFileEntry.Length))
                 {
-                    if (!await IsStreamLengthMatchesReportedAsync(licenseFileStream, licenseFileEntry.Length))
-                    {
-                        return PackageValidationResult.Invalid(Strings.UploadPackage_CorruptNupkg);
-                    }
+                    return PackageValidationResult.Invalid(Strings.UploadPackage_CorruptNupkg);
                 }
 
                 // zip streams do not support seeking, so we'll have to reopen them
@@ -318,6 +340,109 @@ namespace NuGetGallery
             }
 
             return null;
+        }
+
+        private async Task<PackageValidationResult> CheckIconMetadataAsync(PackageArchiveReader nuGetPackage, List<IValidationMessage> warnings, User user)
+        {
+            var nuspecReader = GetNuspecReader(nuGetPackage);
+            var iconElement = nuspecReader.IconElement;
+            var embeddedIconsEnabled = _featureFlagService.AreEmbeddedIconsEnabled(user);
+
+            if (iconElement == null)
+            {
+                if (embeddedIconsEnabled && !string.IsNullOrWhiteSpace(nuspecReader.GetIconUrl()))
+                {
+                    warnings.Add(new IconUrlDeprecationValidationMessage());
+                }
+                return null;
+            }
+
+            if (!embeddedIconsEnabled)
+            {
+                return PackageValidationResult.Invalid(Strings.UploadPackage_EmbeddedIconNotAccepted);
+            }
+
+            if (HasChildElements(iconElement))
+            {
+                return PackageValidationResult.Invalid(string.Format(Strings.UploadPackage_NodeContainsChildren, IconNodeName));
+            }
+
+            var iconFilePath = FileNameHelper.GetZipEntryPath(iconElement.Value);
+            if (!FileExists(nuGetPackage, iconFilePath))
+            {
+                return PackageValidationResult.Invalid(
+                    string.Format(
+                        Strings.UploadPackage_FileDoesNotExist,
+                        Strings.UploadPackage_IconFileType,
+                        iconFilePath));
+            }
+
+            var iconFileExtension = Path.GetExtension(iconFilePath);
+            if (!AllowedIconFileExtensions.Contains(iconFileExtension, StringComparer.OrdinalIgnoreCase))
+            {
+                return PackageValidationResult.Invalid(
+                    string.Format(
+                        Strings.UploadPackage_InvalidIconFileExtension,
+                        iconFileExtension,
+                        string.Join(", ", AllowedIconFileExtensions.Where(x => x != string.Empty).Select(extension => $"'{extension}'"))));
+            }
+
+            var iconFileEntry = nuGetPackage.GetEntry(iconFilePath);
+            if (iconFileEntry.Length > MaxAllowedIconLengthForUploading)
+            {
+                return PackageValidationResult.Invalid(
+                    string.Format(
+                        Strings.UploadPackage_FileTooLong,
+                        Strings.UploadPackage_IconFileType,
+                        MaxAllowedLicenseLengthForUploading.ToUserFriendlyBytesLabel()));
+            }
+
+            if (!await IsStreamLengthMatchesReportedAsync(nuGetPackage, iconFilePath, iconFileEntry.Length))
+            {
+                return PackageValidationResult.Invalid(Strings.UploadPackage_CorruptNupkg);
+            }
+
+            bool isJpg = await IsJpegAsync(nuGetPackage, iconFilePath);
+            bool isPng = await IsPngAsync(nuGetPackage, iconFilePath);
+
+            if (!isPng && !isJpg)
+            {
+                return PackageValidationResult.Invalid(Strings.UploadPackage_UnsupportedIconImageFormat);
+            }
+
+            return null;
+        }
+
+        private static async Task<bool> FileMatchesPredicate(PackageArchiveReader nuGetPackage, string filePath, Func<Stream, Task<bool>> predicate)
+        {
+            using (var stream = await nuGetPackage.GetStreamAsync(filePath, CancellationToken.None))
+            {
+                return await predicate(stream);
+            }
+        }
+
+        private static async Task<bool> IsPngAsync(PackageArchiveReader nuGetPackage, string iconPath)
+        {
+            return await FileMatchesPredicate(nuGetPackage, iconPath, stream => stream.NextBytesMatchPngHeaderAsync());
+        }
+
+        private static async Task<bool> IsJpegAsync(PackageArchiveReader nuGetPackage, string iconPath)
+        {
+            return await FileMatchesPredicate(nuGetPackage, iconPath, stream => stream.NextBytesMatchJpegHeaderAsync());
+        }
+
+        private static bool FileExists(PackageArchiveReader nuGetPackage, string filename)
+        {
+            var fileList = new HashSet<string>(nuGetPackage.GetFiles());
+            return fileList.Contains(filename);
+        }
+
+        private static UserContentEnabledNuspecReader GetNuspecReader(PackageArchiveReader nuGetPackage)
+        {
+            using (var nuspec = nuGetPackage.GetNuspec())
+            {
+                return new UserContentEnabledNuspecReader(nuspec);
+            }
         }
 
         private bool IsMalformedDeprecationUrl(string licenseUrl)
@@ -381,7 +506,15 @@ namespace NuGetGallery
             return licenseList;
         }
 
-        private static async Task<bool> IsStreamLengthMatchesReportedAsync(Stream licenseFileStream, long reportedLength)
+        private static async Task<bool> IsStreamLengthMatchesReportedAsync(PackageArchiveReader nuGetPackage, string path, long reportedLength)
+        {
+            using (var stream = await nuGetPackage.GetStreamAsync(path, CancellationToken.None))
+            {
+                return await IsStreamLengthMatchesReportedAsync(stream, reportedLength);
+            }
+        }
+
+        private static async Task<bool> IsStreamLengthMatchesReportedAsync(Stream stream, long reportedLength)
         {
             // one may modify the zip file to report smaller file sizes for the compressed files than actual.
             // Unfortunately, .Net's ZipArchive is not handling this case properly and allows to read full
@@ -393,7 +526,7 @@ namespace NuGetGallery
             int read = 0;
             do
             {
-                read = await licenseFileStream.ReadAsync(buffer, 0, buffer.Length);
+                read = await stream.ReadAsync(buffer, 0, buffer.Length);
                 totalBytesRead += read;
             } while (read > 0 && totalBytesRead < reportedLength + 1); // we want to try to read past the reported length
 
@@ -426,14 +559,15 @@ namespace NuGetGallery
             => licenseElement
                 .GetOptionalAttributeValue("type");
 
-        private class LicenseCheckingNuspecReader : NuspecReader
+        private class UserContentEnabledNuspecReader : NuspecReader
         {
-            public LicenseCheckingNuspecReader(Stream stream)
+            public UserContentEnabledNuspecReader(Stream stream)
                 : base(stream)
             {
             }
 
             public XElement LicenseElement => MetadataNode.Element(MetadataNode.Name.Namespace + LicenseNodeName);
+            public XElement IconElement => MetadataNode.Element(MetadataNode.Name.Namespace + IconNodeName);
         }
 
         private async Task<PackageValidationResult> CheckPackageEntryCountAsync(
@@ -665,7 +799,22 @@ namespace NuGetGallery
 
         public async Task<PackageCommitResult> CommitPackageAsync(Package package, Stream packageFile)
         {
-            await _validationService.StartValidationAsync(package);
+            if (package == null)
+            {
+                throw new ArgumentNullException(nameof(package));
+            }
+
+            if (packageFile == null)
+            {
+                throw new ArgumentNullException(nameof(packageFile));
+            }
+
+            if (!packageFile.CanSeek)
+            {
+                throw new ArgumentException($"{nameof(packageFile)} argument must be seekable stream", nameof(packageFile));
+            }
+
+            await _validationService.UpdatePackageAsync(package);
 
             if (package.PackageStatusKey != PackageStatus.Available
                 && package.PackageStatusKey != PackageStatus.Validating)
@@ -735,6 +884,7 @@ namespace NuGetGallery
                     }
                     try
                     {
+                        packageFile.Seek(0, SeekOrigin.Begin);
                         await _packageFileService.SavePackageFileAsync(package, packageFile);
                     }
                     catch when (package.EmbeddedLicenseType != EmbeddedLicenseFileType.Absent)
@@ -754,12 +904,18 @@ namespace NuGetGallery
 
             try
             {
+                // Sending the validation request after copying to prevent multiple validation requests
+                // sent when several pushes for the same package happen concurrently. Copying the file
+                // resolves the race and only one request will "win" and reach this code.
+                await _validationService.StartValidationAsync(package);
+
                 // commit all changes to database as an atomic transaction
                 await _entitiesContext.SaveChangesAsync();
             }
             catch (Exception ex)
             {
-                // If saving to the DB fails for any reason we need to delete the package we just saved.
+                // If sending the validation request or saving to the DB fails for any reason
+                // we need to delete the package we just saved.
                 if (package.PackageStatusKey == PackageStatus.Validating)
                 {
                     await _packageFileService.DeleteValidationPackageFileAsync(

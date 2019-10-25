@@ -95,12 +95,14 @@ namespace NuGetGallery.Controllers
                 ResultAssert.IsSafeRedirectTo(result, "theReturnUrl");
             }
 
-            [Fact]
-            public void WillNotRedirectToTheReturnUrlWhenReturnUrlContainsAccount()
+            [Theory]
+            [InlineData("account/profile")]
+            [InlineData("Admin/SupportRequest")]
+            public void WillNotRedirectToTheReturnUrlWhenReturnUrlContains(string returnUrl)
             {
                 var controller = GetController<AuthenticationController>();
 
-                var result = controller.LogOff("account/profile");
+                var result = controller.LogOff(returnUrl);
                 ResultAssert.IsSafeRedirectTo(result, null);
             }
         }
@@ -395,7 +397,7 @@ namespace NuGetGallery.Controllers
                     .Verify(x => x.CreateSessionAsync(controller.OwinContext, authUser, false));
 
                 GetMock<AuthenticationService>()
-                    .Verify(x => x.RemoveCredential(user, passwordCredential));
+                    .Verify(x => x.RemoveCredential(user, passwordCredential, true));
 
                 GetMock<IMessageService>()
                     .Verify(x => x.SendMessageAsync(It.IsAny<CredentialAddedMessage>(), false, false));
@@ -1341,7 +1343,7 @@ namespace NuGetGallery.Controllers
                     .Verifiable();
 
                 serviceMock
-                    .Setup(x => x.RemoveCredential(user, passwordCred))
+                    .Setup(x => x.RemoveCredential(user, passwordCred, true))
                     .Completes()
                     .Verifiable();
 
@@ -1567,7 +1569,7 @@ namespace NuGetGallery.Controllers
                     });
 
                 GetMock<AuthenticationService>()
-                    .Setup(x => x.RemoveCredential(user, passwordCred))
+                    .Setup(x => x.RemoveCredential(user, passwordCred, true))
                     .Completes()
                     .Verifiable();
 
@@ -1590,7 +1592,7 @@ namespace NuGetGallery.Controllers
                 // Assert
                 ResultAssert.IsSafeRedirectTo(result, "theReturnUrl");
                 GetMock<AuthenticationService>()
-                    .Verify(x => x.RemoveCredential(user, passwordCred), discontinuedLogin ? Times.Once() : Times.Never());
+                    .Verify(x => x.RemoveCredential(user, passwordCred, true), discontinuedLogin ? Times.Once() : Times.Never());
             }
 
             [Fact]
@@ -1680,6 +1682,56 @@ namespace NuGetGallery.Controllers
                 }
 
                 ResultAssert.IsSafeRedirectTo(result, returnUrl);
+            }
+
+            [Theory]
+            [InlineData("AzureActiveDirectory", false)]
+            [InlineData("AzureActiveDirectory", true)]
+            public async Task GivenAssociatedLocalAdminUser_ItVerifiesTheEnforcedTenantId(string providerUsedForLogin, bool shouldError)
+            {
+                // Arrange
+                var enforcedTenantId = "Some-Tenant-Id";
+
+                var configurationService = GetConfigurationService();
+                configurationService.Current.ConfirmEmailAddresses = false;
+                configurationService.Current.EnforcedTenantIdForAdmin = enforcedTenantId;
+
+                var fakes = Get<Fakes>();
+                GetMock<AuthenticationService>(); // Force a mock to be created
+                var controller = GetController<AuthenticationController>();
+                var cred = new CredentialBuilder().CreateExternalCredential(providerUsedForLogin, "blorg", "Bloog", tenantId: shouldError ? "non-enforced-tenant-id" : enforcedTenantId);
+                var authUser = new AuthenticatedUser(
+                    fakes.CreateUser("test", cred),
+                    cred);
+
+                authUser.User.Roles.Add(new Role { Name = CoreConstants.AdminRoleName });
+
+                GetMock<AuthenticationService>()
+                    .Setup(x => x.AuthenticateExternalLogin(controller.OwinContext))
+                    .CompletesWith(new AuthenticateExternalLoginResult()
+                    {
+                        ExternalIdentity = new ClaimsIdentity(),
+                        Authentication = authUser
+                    });
+
+                GetMock<AuthenticationService>()
+                    .Setup(x => x.CreateSessionAsync(controller.OwinContext, authUser, false))
+                    .Returns(Task.FromResult(0))
+                    .Verifiable();
+
+                // Act
+                var result = await controller.LinkExternalAccount("theReturnUrl");
+
+                // Assert
+                if (shouldError)
+                {
+                    var expectedMessage = string.Format(Strings.SiteAdminNotLoggedInWithRequiredTenant, enforcedTenantId);
+                    VerifyExternalLinkExpiredResult(controller, result, expectedMessage);
+                } else
+                {
+                    ResultAssert.IsSafeRedirectTo(result, "theReturnUrl");
+                    GetMock<AuthenticationService>().VerifyAll();
+                }
             }
 
             [Theory]
@@ -2249,7 +2301,7 @@ namespace NuGetGallery.Controllers
         {
             expectedMessage = expectedMessage ?? Strings.ExternalAccountLinkExpired;
             ResultAssert.IsRedirect(result, permanent: false, url: controller.Url.LogOn(relativeUrl: false));
-            Assert.Equal(expectedMessage, controller.TempData["Message"]);
+            Assert.Equal(expectedMessage, controller.TempData["ErrorMessage"]);
         }
 
         private static void EnableAllAuthenticators(AuthenticationService authService)

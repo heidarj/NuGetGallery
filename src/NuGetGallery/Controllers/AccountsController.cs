@@ -2,13 +2,16 @@
 // Licensed under the Apache License, Version 2.0. See License.txt in the project root for license information.
 
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Threading.Tasks;
 using System.Web;
 using System.Web.Mvc;
+using System.Web.UI;
 using NuGet.Services.Entities;
 using NuGet.Services.Messaging.Email;
+using NuGetGallery.Areas.Admin.ViewModels;
 using NuGetGallery.Authentication;
 using NuGetGallery.Filters;
 using NuGetGallery.Helpers;
@@ -30,23 +33,31 @@ namespace NuGetGallery
             public string EmailUpdateCancelled { get; set; }
         }
 
-        public AuthenticationService AuthenticationService { get; }
+        protected AuthenticationService AuthenticationService { get; }
 
-        public IPackageService PackageService { get; }
+        protected IPackageService PackageService { get; }
 
-        public IMessageService MessageService { get; }
+        protected IMessageService MessageService { get; }
 
-        public IUserService UserService { get; }
+        protected IUserService UserService { get; }
 
-        public ITelemetryService TelemetryService { get; }
+        protected ITelemetryService TelemetryService { get; }
 
-        public ISecurityPolicyService SecurityPolicyService { get; }
+        protected ISecurityPolicyService SecurityPolicyService { get; }
 
-        public ICertificateService CertificateService { get; }
+        protected ICertificateService CertificateService { get; }
 
-        public IContentObjectService ContentObjectService { get; }
+        protected IContentObjectService ContentObjectService { get; }
 
-        public IMessageServiceConfiguration MessageServiceConfiguration { get; }
+        protected IMessageServiceConfiguration MessageServiceConfiguration { get; }
+
+        protected IDeleteAccountService DeleteAccountService { get; }
+
+        protected IIconUrlProvider IconUrlProvider { get; }
+
+        protected IGravatarProxyService GravatarProxy { get; }
+
+        private readonly DeleteAccountListPackageItemViewModelFactory _deleteAccountListPackageItemViewModelFactory;
 
         public AccountsController(
             AuthenticationService authenticationService,
@@ -57,7 +68,10 @@ namespace NuGetGallery
             ISecurityPolicyService securityPolicyService,
             ICertificateService certificateService,
             IContentObjectService contentObjectService,
-            IMessageServiceConfiguration messageServiceConfiguration)
+            IMessageServiceConfiguration messageServiceConfiguration,
+            IDeleteAccountService deleteAccountService,
+            IIconUrlProvider iconUrlProvider,
+            IGravatarProxyService gravatarProxy)
         {
             AuthenticationService = authenticationService ?? throw new ArgumentNullException(nameof(authenticationService));
             PackageService = packageService ?? throw new ArgumentNullException(nameof(packageService));
@@ -68,6 +82,11 @@ namespace NuGetGallery
             CertificateService = certificateService ?? throw new ArgumentNullException(nameof(certificateService));
             ContentObjectService = contentObjectService ?? throw new ArgumentNullException(nameof(contentObjectService));
             MessageServiceConfiguration = messageServiceConfiguration ?? throw new ArgumentNullException(nameof(messageServiceConfiguration));
+            DeleteAccountService = deleteAccountService ?? throw new ArgumentNullException(nameof(deleteAccountService));
+            IconUrlProvider = iconUrlProvider ?? throw new ArgumentNullException(nameof(iconUrlProvider));
+            GravatarProxy = gravatarProxy ?? throw new ArgumentNullException(nameof(gravatarProxy));
+
+            _deleteAccountListPackageItemViewModelFactory = new DeleteAccountListPackageItemViewModelFactory(PackageService, IconUrlProvider);
         }
 
         public abstract string AccountAction { get; }
@@ -106,12 +125,19 @@ namespace NuGetGallery
                 return new HttpStatusCodeResult(HttpStatusCode.Forbidden, Strings.Unauthorized);
             }
 
-            var alreadyConfirmed = account.UnconfirmedEmailAddress == null;
+            var hasUnconfirmedEmailAddress = account.UnconfirmedEmailAddress != null;
 
             ConfirmationViewModel model;
-            if (!alreadyConfirmed)
+            if (hasUnconfirmedEmailAddress)
             {
-                await SendNewAccountEmailAsync(account);
+                if (account.EmailAddress == null)
+                {
+                    await SendNewAccountEmailAsync(account);
+                }
+                else
+                {
+                    await SendEmailChangedConfirmationNoticeAsync(account);
+                }
 
                 model = new ConfirmationViewModel(account)
                 {
@@ -310,9 +336,68 @@ namespace NuGetGallery
             return View("DeleteAccount", GetDeleteAccountViewModel(accountToDelete));
         }
 
-        protected abstract DeleteAccountViewModel<TUser> GetDeleteAccountViewModel(TUser account);
+        [HttpGet]
+        [UIAuthorize(Roles = "Admins")]
+        public virtual ActionResult Delete(string accountName)
+        {
+            var accountToDelete = UserService.FindByUsername(accountName) as TUser;
+            if (accountToDelete == null || accountToDelete.IsDeleted)
+            {
+                return HttpNotFound();
+            }
+
+            return View(GetDeleteAccountViewName(), GetDeleteAccountViewModel(accountToDelete));
+        }
+
+        [HttpDelete]
+        [UIAuthorize(Roles = "Admins")]
+        [RequiresAccountConfirmation("Delete account")]
+        [ValidateAntiForgeryToken]
+        public virtual async Task<ActionResult> Delete(DeleteAccountAsAdminViewModel model)
+        {
+            var accountToDelete = UserService.FindByUsername(model.AccountName) as TUser;
+            if (accountToDelete == null || accountToDelete.IsDeleted)
+            {
+                return View("DeleteAccountStatus", new DeleteAccountStatus()
+                {
+                    AccountName = model.AccountName,
+                    Description = $"Account {model.AccountName} not found.",
+                    Success = false
+                });
+            }
+            else
+            {
+                var admin = GetCurrentUser();
+                var status = await DeleteAccountService.DeleteAccountAsync(
+                    userToBeDeleted: accountToDelete,
+                    userToExecuteTheDelete: admin,
+                    orphanPackagePolicy: model.ShouldUnlist ? AccountDeletionOrphanPackagePolicy.UnlistOrphans : AccountDeletionOrphanPackagePolicy.KeepOrphans);
+                return View("DeleteAccountStatus", status);
+            }
+        }
+
+        protected abstract string GetDeleteAccountViewName();
+
+        protected abstract DeleteAccountViewModel GetDeleteAccountViewModel(TUser account);
 
         public abstract Task<ActionResult> RequestAccountDeletion(string accountName = null);
+
+        protected List<DeleteAccountListPackageItemViewModel> GetOwnedPackagesViewModels(User account)
+        {
+            return PackageService
+                 .FindPackagesByAnyMatchingOwner(account, includeUnlisted: true)
+                 .Select(p => CreateDeleteAccountListPackageItemViewModel(p, account, GetCurrentUser()))
+                 .ToList();
+        }
+
+        private DeleteAccountListPackageItemViewModel CreateDeleteAccountListPackageItemViewModel(
+            Package package,
+            User userToDelete,
+            User currentUser)
+        {
+            return _deleteAccountListPackageItemViewModelFactory.Create(package, userToDelete, currentUser);
+        }
+
 
         protected virtual TUser GetAccount(string accountName)
         {
@@ -540,6 +625,24 @@ namespace NuGetGallery
                 });
 
             return Json(HttpStatusCode.OK, certificates, JsonRequestBehavior.AllowGet);
+        }
+
+        [HttpGet]
+        [OutputCache(
+            Duration = GalleryConstants.GravatarCacheDurationSeconds,
+            Location = OutputCacheLocation.Downstream,
+            VaryByParam = "imageSize")]
+        public async Task<ActionResult> GetAvatar(
+            string accountName,
+            int? imageSize = GalleryConstants.GravatarImageSize)
+        {
+            var result = await GravatarProxy.GetAvatarOrNullAsync(accountName, imageSize ?? GalleryConstants.GravatarImageSize);
+            if (result == null)
+            {
+                return HttpNotFound();
+            }
+
+            return File(result.AvatarStream, result.ContentType);
         }
 
         private bool CanManageCertificates(User currentUser, User account)

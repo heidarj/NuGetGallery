@@ -224,6 +224,7 @@ namespace NuGetGallery
                 Assert.Equal("http://thelicenseurl/", package.LicenseUrl);
                 Assert.Equal("http://theprojecturl/", package.ProjectUrl);
                 Assert.True(package.RequiresLicenseAcceptance);
+                Assert.True(package.DevelopmentDependency);
                 Assert.Equal("theSummary", package.Summary);
                 Assert.Equal("theTags", package.Tags);
                 Assert.Equal("theTitle", package.Title);
@@ -251,6 +252,43 @@ namespace NuGetGallery
 
                 // Assert
                 Assert.Equal("fr", package.Language);
+            }
+
+            [Theory]
+            [InlineData(true, true)]
+            [InlineData(false, false)]
+            [InlineData(null, false)]
+            public async Task WillReadDevelopmentDependencyFromPackage(bool? developmentDependency, bool expected)
+            {
+                var packageRegistrationRepository = new Mock<IEntityRepository<PackageRegistration>>();
+                var service = CreateService(packageRegistrationRepository: packageRegistrationRepository, setup:
+                        mockPackageService => { mockPackageService.Setup(x => x.FindPackageRegistrationById(It.IsAny<string>())).Returns((PackageRegistration)null); });
+
+                var nugetPackage = PackageServiceUtility.CreateNuGetPackage(developmentDependency: developmentDependency);
+
+                var currentUser = new User();
+
+                var package = await service.CreatePackageAsync(nugetPackage.Object, new PackageStreamMetadata(), currentUser, currentUser, isVerified: false);
+
+                // Assert
+                Assert.Equal(expected, package.DevelopmentDependency);
+            }
+
+            [Fact]
+            public async Task WillThrowIfDevelopmentDependencyIsInvalid()
+            {
+                var packageRegistrationRepository = new Mock<IEntityRepository<PackageRegistration>>();
+                var service = CreateService(packageRegistrationRepository: packageRegistrationRepository, setup:
+                    mockPackageService => { mockPackageService.Setup(x => x.FindPackageRegistrationById(It.IsAny<string>())).Returns((PackageRegistration)null); });
+
+                var nugetPackage = PackageServiceUtility.CreateNuGetPackage(
+                    getCustomNuspecNodes: () => "<developmentDependency>foo</developmentDependency>");
+
+                var currentUser = new User();
+
+                // Assert
+                var exception = await Assert.ThrowsAsync<InvalidPackageException>(async () => await service.CreatePackageAsync(nugetPackage.Object, new PackageStreamMetadata(), currentUser, currentUser, isVerified: false));
+                Assert.Contains("developmentDependency", exception.Message);
             }
 
             [Fact]
@@ -498,7 +536,7 @@ namespace NuGetGallery
 
                 var ex = await Assert.ThrowsAsync<InvalidPackageException>(async () => await service.CreatePackageAsync(nugetPackage.Object, new PackageStreamMetadata(), owner: null, currentUser: null, isVerified: false));
 
-                Assert.Equal(String.Format(Strings.NuGetPackagePropertyTooLong, "Id", NuGet.Services.Entities.Constants.MaxPackageIdLength), ex.Message);
+                Assert.Equal(String.Format(Strings.NuGetPackagePropertyTooLong, "ID", NuGet.Services.Entities.Constants.MaxPackageIdLength), ex.Message);
             }
 
             [Fact]
@@ -823,6 +861,71 @@ namespace NuGetGallery
 
                 // Assert
                 Assert.Equal(string.Format(Strings.NuGetPackagePropertyTooLong, "RepositoryUrl", "4000"), ex.Message);
+            }
+        }
+
+        public class TheFilterExactPackageMethod
+        {
+            [Fact]
+            public void ThrowsIfPackagesNull()
+            {
+                Assert.Throws<ArgumentNullException>(() => InvokeMethod(null, null));
+            }
+
+            [Theory]
+            [InlineData(null)]
+            [InlineData("1.0.0")]
+            public void ReturnsNullIfEmptyList(string version)
+            {
+                Assert.Equal(null, InvokeMethod(new Package[0], version));
+            }
+
+            [Theory]
+            [InlineData(null)]
+            [InlineData("1.0.0-afakepackage")]
+            public void ReturnsNullIfMissing(string version)
+            {
+                var packages = new[]
+                {
+                    CreateTestPackage("1.0.0"),
+                    CreateTestPackage("2.0.0")
+                };
+
+                Assert.Equal(null, InvokeMethod(packages, version));
+            }
+
+            /// <remarks>
+            /// The method should compare the normalized version of the package and be case-insensitive.
+            /// </remarks>
+            [Theory]
+            [InlineData("1.0.0-a")]
+            [InlineData("1.0.0-A")]
+            [InlineData("1.0.0-a+metadata")]
+            [InlineData("1.0.0-A+metadata")]
+            public void ReturnsVersionIfExists(string version)
+            {
+                var package = CreateTestPackage("1.0.0-a");
+                var packages = new[] 
+                {
+                    package,
+                    CreateTestPackage("2.0.0")
+                };
+
+                Assert.Equal(package, InvokeMethod(packages, version));
+            }
+
+            private Package InvokeMethod(IReadOnlyCollection<Package> packages, string version)
+            {
+                var service = CreateService();
+                return service.FilterExactPackage(packages, version);
+            }
+
+            private Package CreateTestPackage(string normalizedVersion)
+            {
+                return new Package
+                {
+                    NormalizedVersion = normalizedVersion
+                };
             }
         }
 
@@ -1408,284 +1511,6 @@ namespace NuGetGallery
             }
         }
 
-        public class TheMarkPackageListedMethod
-        {
-            [Fact]
-            public async Task SetsListedToTrue()
-            {
-                var packageRegistration = new PackageRegistration { Id = "theId" };
-                var package = new Package { Version = "1.0", PackageRegistration = packageRegistration, Listed = false };
-                var packageRepository = new Mock<IEntityRepository<Package>>();
-                var service = CreateService(packageRepository: packageRepository);
-
-                await service.MarkPackageListedAsync(package);
-
-                Assert.True(package.Listed);
-            }
-
-            [Fact]
-            public async Task DoNotCommitIfCommitChangesIsFalse()
-            {
-                // Assert
-                var packageRegistration = new PackageRegistration { Id = "theId" };
-                var package = new Package { Version = "1.0", PackageRegistration = packageRegistration, Listed = false };
-                var packageRepository = new Mock<IEntityRepository<Package>>();
-                var service = CreateService(packageRepository: packageRepository);
-
-                // Act
-                await service.MarkPackageListedAsync(package, commitChanges: false);
-
-                // Assert
-                packageRepository.Verify(p => p.CommitChangesAsync(), Times.Never());
-            }
-
-            [Fact]
-            public async Task CommitIfCommitChangesIsTrue()
-            {
-                // Assert
-                var packageRegistration = new PackageRegistration { Id = "theId" };
-                var package = new Package { Version = "1.0", PackageRegistration = packageRegistration, Listed = false };
-                var packageRepository = new Mock<IEntityRepository<Package>>();
-                var service = CreateService(packageRepository: packageRepository);
-
-                // Act
-                await service.MarkPackageListedAsync(package, commitChanges: true);
-
-                // Assert
-                packageRepository.Verify(p => p.CommitChangesAsync(), Times.Once());
-            }
-
-            [Fact]
-            public async Task OnPackageVersionHigherThanLatestSetsItToLatestVersion()
-            {
-                var packageRegistration = new PackageRegistration { Id = "theId" };
-                var packages = new[]
-                    {
-                        new Package
-                            {
-                                Version = "1.0.1",
-                                PackageRegistration = packageRegistration,
-                                Listed = false,
-                                IsLatest = false,
-                                IsLatestStable = false
-                            },
-                        new Package
-                            {
-                                Version = "1.0.0",
-                                PackageRegistration = packageRegistration,
-                                Listed = true,
-                                IsLatest = true,
-                                IsLatestStable = true
-                            }
-                    }.ToList();
-                packageRegistration.Packages = packages;
-                var packageRepository = new Mock<IEntityRepository<Package>>();
-                var service = CreateService(packageRepository: packageRepository);
-
-                await service.MarkPackageListedAsync(packages[0]);
-
-                Assert.True(packageRegistration.Packages.ElementAt(0).IsLatest);
-                Assert.True(packageRegistration.Packages.ElementAt(0).IsLatestStable);
-                Assert.False(packages.ElementAt(1).IsLatest);
-                Assert.False(packages.ElementAt(1).IsLatestStable);
-            }
-
-
-            [Fact]
-            public async Task ThrowsWhenPackageDeleted()
-            {
-                var packageRegistration = new PackageRegistration { Id = "theId" };
-                var package = new Package
-                {
-                    Version = "1.0",
-                    PackageRegistration = packageRegistration,
-                    Listed = false,
-                    PackageStatusKey = PackageStatus.Deleted,
-                };
-                var packageRepository = new Mock<IEntityRepository<Package>>();
-                var service = CreateService(packageRepository: packageRepository);
-
-                await Assert.ThrowsAsync<InvalidOperationException>(async () => await service.MarkPackageListedAsync(package));
-            }
-
-            [Fact]
-            public async Task ThrowsWhenPackageFailedValidation()
-            {
-                var packageRegistration = new PackageRegistration { Id = "theId" };
-                var package = new Package
-                {
-                    Version = "1.0",
-                    PackageRegistration = packageRegistration,
-                    Listed = false,
-                    PackageStatusKey = PackageStatus.FailedValidation,
-                };
-                var packageRepository = new Mock<IEntityRepository<Package>>();
-                var service = CreateService(packageRepository: packageRepository);
-
-                await Assert.ThrowsAsync<InvalidOperationException>(async () => await service.MarkPackageListedAsync(package));
-            }
-
-            [Fact]
-            public async Task WritesAnAuditRecord()
-            {
-                // Arrange
-                var packageRegistration = new PackageRegistration { Id = "theId" };
-                var package = new Package { Version = "1.0", PackageRegistration = packageRegistration, Listed = false };
-                var packageRepository = new Mock<IEntityRepository<Package>>();
-                var auditingService = new TestAuditingService();
-                var service = CreateService(
-                    packageRepository: packageRepository,
-                    auditingService: auditingService);
-
-                // Act
-                await service.MarkPackageListedAsync(package);
-
-                // Assert
-                Assert.True(auditingService.WroteRecord<PackageAuditRecord>(ar =>
-                    ar.Action == AuditedPackageAction.List
-                    && ar.Id == package.PackageRegistration.Id
-                    && ar.Version == package.Version));
-            }
-
-            [Fact]
-            public async Task EmitsTelemetry()
-            {
-                var packageRegistration = new PackageRegistration { Id = "theId" };
-                var package = new Package { Version = "1.0", PackageRegistration = packageRegistration, Listed = false };
-                var telemetryService = new Mock<ITelemetryService>();
-                var service = CreateService(telemetryService: telemetryService);
-
-                await service.MarkPackageListedAsync(package);
-
-                telemetryService.Verify(
-                    x => x.TrackPackageListed(package),
-                    Times.Once);
-            }
-        }
-
-        public class TheMarkPackageUnlistedMethod
-        {
-            [Fact]
-            public async Task SetsListedToFalse()
-            {
-                var packageRegistration = new PackageRegistration { Id = "theId" };
-                var package = new Package { Version = "1.0", PackageRegistration = packageRegistration };
-                var packageRepository = new Mock<IEntityRepository<Package>>();
-                var service = CreateService(packageRepository: packageRepository);
-
-                await service.MarkPackageUnlistedAsync(package);
-
-                Assert.False(package.Listed);
-            }
-
-            [Fact]
-            public async Task CommitIfCommitChangesIfTrue()
-            {
-                // Act
-                var packageRegistration = new PackageRegistration { Id = "theId" };
-                var package = new Package { Version = "1.0", PackageRegistration = packageRegistration };
-                var packageRepository = new Mock<IEntityRepository<Package>>();
-                var service = CreateService(packageRepository: packageRepository);
-
-                // Act
-                await service.MarkPackageUnlistedAsync(package, commitChanges: true);
-
-                // Assert
-                packageRepository.Verify(p => p.CommitChangesAsync(), Times.Once());
-            }
-
-            [Fact]
-            public async Task DoNotCommitIfCommitChangesIfFalse()
-            {
-                // Act
-                var packageRegistration = new PackageRegistration { Id = "theId" };
-                var package = new Package { Version = "1.0", PackageRegistration = packageRegistration };
-                var packageRepository = new Mock<IEntityRepository<Package>>();
-                var service = CreateService(packageRepository: packageRepository);
-
-                // Act
-                await service.MarkPackageUnlistedAsync(package, commitChanges: false);
-
-                // Assert
-                packageRepository.Verify(p => p.CommitChangesAsync(), Times.Never());
-            }
-
-            [Fact]
-            public async Task OnLatestPackageVersionSetsPreviousToLatestVersion()
-            {
-                var packageRegistration = new PackageRegistration { Id = "theId" };
-                var packages = new[]
-                    {
-                        new Package
-                            { Version = "1.0.1", PackageRegistration = packageRegistration, IsLatest = true, IsLatestStable = true },
-                        new Package
-                            { Version = "1.0.0", PackageRegistration = packageRegistration, IsLatest = false, IsLatestStable = false }
-                    }.ToList();
-                packageRegistration.Packages = packages;
-                var packageRepository = new Mock<IEntityRepository<Package>>();
-                var service = CreateService(packageRepository: packageRepository);
-
-                await service.MarkPackageUnlistedAsync(packages[0]);
-
-                Assert.False(packageRegistration.Packages.ElementAt(0).IsLatest);
-                Assert.False(packageRegistration.Packages.ElementAt(0).IsLatestStable);
-                Assert.True(packages.ElementAt(1).IsLatest);
-                Assert.True(packages.ElementAt(1).IsLatestStable);
-            }
-
-            [Fact]
-            public async Task OnOnlyListedPackageSetsNoPackageToLatestVersion()
-            {
-                var packageRegistration = new PackageRegistration { Id = "theId" };
-                var package = new Package { Version = "1.0.1", PackageRegistration = packageRegistration, IsLatest = true, IsLatestStable = true };
-                packageRegistration.Packages = new List<Package>(new[] { package });
-                var packageRepository = new Mock<IEntityRepository<Package>>();
-                var service = CreateService(packageRepository: packageRepository);
-
-                await service.MarkPackageUnlistedAsync(package);
-
-                Assert.False(package.IsLatest, "IsLatest");
-                Assert.False(package.IsLatestStable, "IsLatestStable");
-            }
-
-            [Fact]
-            public async Task WritesAnAuditRecord()
-            {
-                // Arrange
-                var packageRegistration = new PackageRegistration { Id = "theId" };
-                var package = new Package { Version = "1.0", PackageRegistration = packageRegistration, Listed = true };
-                var packageRepository = new Mock<IEntityRepository<Package>>();
-                var auditingService = new TestAuditingService();
-                var service = CreateService(
-                    packageRepository: packageRepository,
-                    auditingService: auditingService);
-
-                // Act
-                await service.MarkPackageUnlistedAsync(package);
-
-                // Assert
-                Assert.True(auditingService.WroteRecord<PackageAuditRecord>(ar =>
-                    ar.Action == AuditedPackageAction.Unlist
-                    && ar.Id == package.PackageRegistration.Id
-                    && ar.Version == package.Version));
-            }
-
-            [Fact]
-            public async Task EmitsTelemetry()
-            {
-                var packageRegistration = new PackageRegistration { Id = "theId" };
-                var package = new Package { Version = "1.0", PackageRegistration = packageRegistration, Listed = true };
-                var telemetryService = new Mock<ITelemetryService>();
-                var service = CreateService(telemetryService: telemetryService);
-
-                await service.MarkPackageUnlistedAsync(package);
-
-                telemetryService.Verify(
-                    x => x.TrackPackageUnlisted(package),
-                    Times.Once);
-            }
-        }
-
         public class ThePublishPackageMethod
         {
             [Fact]
@@ -1986,7 +1811,7 @@ namespace NuGetGallery
         public class TheRemovePackageOwnerMethod
         {
             [Fact]
-            public async Task RemovesPackageOwner()
+            public async Task WillRemoveOneOfManyOwners()
             {
                 var service = CreateService();
                 var owner1 = new User { Key = 1, Username = "Owner1" };
@@ -1999,7 +1824,7 @@ namespace NuGetGallery
             }
 
             [Fact]
-            public async Task WontRemoveLastOwner()
+            public async Task WillRemoveLastOwner()
             {
                 var service = CreateService();
                 var singleOwner = new User { Key = 1, Username = "Owner" };
@@ -2081,25 +1906,28 @@ namespace NuGetGallery
                 }
 
                 // Configure package ownership
-                var package = new PackageRegistration() { Key = 4 };
+                var package = new Package();
+                var packageRegistration = new PackageRegistration() { Key = 4 };
+                packageRegistration.Packages.Add(package);
+
                 if (state.HasFlag(OwnershipState.OwnedByUser1))
                 {
-                    package.Owners.Add(user1);
+                    packageRegistration.Owners.Add(user1);
                 }
 
                 if (state.HasFlag(OwnershipState.OwnedByUser2))
                 {
-                    package.Owners.Add(user2);
+                    packageRegistration.Owners.Add(user2);
                 }
 
                 if (state.HasFlag(OwnershipState.OwnedByOrganization1))
                 {
-                    package.Owners.Add(organization1);
+                    packageRegistration.Owners.Add(organization1);
                 }
 
                 if (state.HasFlag(OwnershipState.OwnedByOrganization2))
                 {
-                    package.Owners.Add(organization2);
+                    packageRegistration.Owners.Add(organization2);
                 }
 
                 // Determine expected result and account to delete
@@ -2160,10 +1988,28 @@ namespace NuGetGallery
 
                 // Delete account
                 var service = CreateService();
-                var result = service.WillPackageBeOrphanedIfOwnerRemoved(package, userToDelete);
+                var result = service.WillPackageBeOrphanedIfOwnerRemoved(packageRegistration, userToDelete);
 
                 // Assert expected result
                 Assert.Equal(expectedResult, result);
+            }
+
+            [Fact]
+            public void APackageIdThatHasOnlyARegistrationCannotBeOrphaned()
+            {
+                // Create users to test
+                var user = new User("testUser") { Key = 0 };
+               
+                // Configure package registration ownership
+                var packageRegistration = new PackageRegistration() { Key = 1 };
+                packageRegistration.Owners.Add(user);
+
+                // Delete account
+                var service = CreateService();
+                var result = service.WillPackageBeOrphanedIfOwnerRemoved(packageRegistration, user);
+
+                // Assert expected result
+                Assert.False(result);
             }
 
             private void AddMemberToOrganization(Organization organization, User member)
@@ -2502,6 +2348,54 @@ namespace NuGetGallery
                 auditingService.Verify(x => x.SaveAuditRecordAsync(
                     It.IsAny<PackageRegistrationAuditRecord>()), Times.Never);
                 telemetryService.Verify(x => x.TrackRequiredSignerSet(It.IsAny<string>()), Times.Never);
+            }
+        }
+
+        public class TheEnrichPackageFromNuGetPackageMethod
+        {
+            [Theory]
+            [InlineData("iconfilename", true)]
+            [InlineData(null, false)]
+            public void SetsEmbeddedIconFlagProperly(string iconFilename, bool expectedFlag)
+            {
+                var service = CreateService();
+                var package = new Package
+                {
+                    PackageRegistration = new PackageRegistration
+                    {
+                        Id = "SomePackage"
+                    },
+                    HasEmbeddedIcon = false,
+                };
+
+                // the EnrichPackageFromNuGetPackage method does not read icon filename from the PackageArchiveReader
+                // so we won't bother setting it up here.
+                var packageStream = PackageServiceUtility.CreateNuGetPackageStream(package.Id);
+
+                var packageArchiveReader = new PackageArchiveReader(packageStream);
+
+                var metadataDictionary = new Dictionary<string, string>
+                {
+                    { "version", "1.2.3" },
+                };
+
+                if (iconFilename != null)
+                {
+                    metadataDictionary.Add("icon", iconFilename);
+                }
+
+                var packageMetadata = new PackageMetadata(
+                    metadataDictionary,
+                    Enumerable.Empty<PackageDependencyGroup>(),
+                    Enumerable.Empty<FrameworkSpecificGroup>(),
+                    Enumerable.Empty<NuGet.Packaging.Core.PackageType>(),
+                    new NuGetVersion(3, 2, 1),
+                    repositoryMetadata: null,
+                    licenseMetadata: null);
+
+                service.EnrichPackageFromNuGetPackage(package, packageArchiveReader, packageMetadata, new PackageStreamMetadata(), new User());
+
+                Assert.Equal(expectedFlag, package.HasEmbeddedIcon);
             }
         }
     }

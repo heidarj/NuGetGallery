@@ -6,8 +6,7 @@ using System.Collections.Generic;
 using System.Net.Http;
 using System.Threading.Tasks;
 using Newtonsoft.Json.Linq;
-using SearchModels = NuGet.Services.Search.Models;
-using NuGet.Services.Search.Client;
+using SearchModels = NuGetGallery.Infrastructure.Search.Models;
 
 namespace NuGetGallery.Infrastructure.Search 
 {
@@ -38,7 +37,9 @@ namespace NuGetGallery.Infrastructure.Search
             {SearchModels.SortOrder.Relevance, "relevance"},
             {SearchModels.SortOrder.Published, "published"},
             {SearchModels.SortOrder.TitleAscending, "title-asc"},
-            {SearchModels.SortOrder.TitleDescending, "title-desc"}
+            {SearchModels.SortOrder.TitleDescending, "title-desc"},
+            {SearchModels.SortOrder.CreatedAscending, "created-asc"},
+            {SearchModels.SortOrder.CreatedDescending, "created-desc"},
         };
 
         // This code is copied from the SearchClient 

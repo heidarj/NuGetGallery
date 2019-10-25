@@ -70,6 +70,10 @@ body {
   .container {
     margin-top: 50px;
     margin-bottom: 50px;
+
+    // This is a workaround for the following bug:
+    // https://github.com/microsoft/accessibility-insights-web/issues/692
+    background-color: @panel-footer-bg;
   }
 
   a {
@@ -398,5 +402,11 @@ img.reserved-indicator-icon {
 
   h1 {
     margin-top: 0px;
+  }
+}
+
+.page-account-settings, .page-manage-organizations {
+  .small-fingerprint {
+    font-size: 75%;
   }
 }

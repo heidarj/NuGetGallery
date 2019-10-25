@@ -24,13 +24,7 @@ namespace NuGetGallery
         public const int GravatarElementSize = 32;
         public const int GravatarImageSize = GravatarElementSize * 2;
         public const int GravatarImageSizeLarge = 332;
-
-        /// <summary>
-        /// Parameters for calculating account lockout period after 
-        /// wrong password entry.
-        /// </summary>
-        public const double AccountLockoutMultiplierInMinutes = 10;
-        public const double AllowedLoginAttempts = 10;
+        public const int GravatarCacheDurationSeconds = 300;
 
         public const int MaxEmailSubjectLength = 255;
         internal static readonly NuGetVersion MaxSupportedMinClientVersion = new NuGetVersion("4.1.0.0");
@@ -39,15 +33,10 @@ namespace NuGetGallery
         public const string ReadMeFileSavePathTemplateActive = "active/{0}/{1}{2}";
         public const string ReadMeFileSavePathTemplatePending = "pending/{0}/{1}{2}";
 
-        public const string MarkdownFileExtension = ".md";
-        public const string HtmlFileExtension = ".html";
-        public const string JsonFileExtension = ".json";
-
         public const string PopularitySortOrder = "package-download-count";
         public const string RecentSortOrder = "package-created";
         public const string RelevanceSortOrder = "relevance";
 
-        public const string Sha1HashAlgorithmId = "SHA1";
         public const string PBKDF2HashAlgorithmId = "PBKDF2";
 
         public const string UploadFileNameTemplate = "{0}{1}";
@@ -82,13 +71,7 @@ namespace NuGetGallery
         public const string UsernameValidationErrorMessage =
             "User names must start and end with a letter or number, and may only contain letters, numbers, underscores, periods, and hyphens in between.";
 
-        internal const string ApiKeyHeaderName = "X-NuGet-ApiKey";
-        // X-NuGet-Client-Version header was deprecated and replaced with X-NuGet-Protocol-Version header
-        // It stays here for backwards compatibility
-        internal const string ClientVersionHeaderName = "X-NuGet-Client-Version";
-        internal const string NuGetProtocolHeaderName = "X-NuGet-Protocol-Version";
         internal const string WarningHeaderName = "X-NuGet-Warning";
-        internal const string UserAgentHeaderName = "User-Agent";
         
         /// <summary>
         /// This header is for internal use only. It indicates whether an OData query is "custom". Custom means not
@@ -102,11 +85,6 @@ namespace NuGetGallery
         internal const string CustomQueryHeaderName = "X-NuGet-CustomQuery";
 
         public static readonly string ReturnUrlParameterName = "ReturnUrl";
-        public static readonly string CurrentUserOwinEnvironmentKey = "nuget.user";
-
-        public const string DevelopmentEnvironment = "Development";
-
-        public const string GitRepository = "git";
 
         public const string LicenseDeprecationUrl = "https://aka.ms/deprecateLicenseUrl";
 
@@ -116,10 +94,6 @@ namespace NuGetGallery
             public static readonly string TermsOfUse = "Terms-Of-Use";
             public static readonly string PrivacyPolicy = "Privacy-Policy";
             public static readonly string Team = "Team";
-            public static readonly string LoginDiscontinuationConfiguration = "Login-Discontinuation-Configuration";
-            public static readonly string CertificatesConfiguration = "Certificates-Configuration";
-            public static readonly string SymbolsConfiguration = "Symbols-Configuration";
-            public static readonly string TyposquattingConfiguration = "Typosquatting-Configuration";
         }
 
         public static class StatisticsDimensions

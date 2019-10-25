@@ -17,11 +17,11 @@ using System.Web.Hosting;
 using System.Web.Mvc;
 using AnglicanGeek.MarkdownMailer;
 using Autofac;
-using Autofac.Extensions.DependencyInjection;
 using Autofac.Core;
+using Autofac.Extensions.DependencyInjection;
 using Elmah;
-using Microsoft.ApplicationInsights.Extensibility;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Http;
 using Microsoft.Extensions.Logging;
 using Microsoft.WindowsAzure.ServiceRuntime;
 using NuGet.Services.Entities;
@@ -31,8 +31,6 @@ using NuGet.Services.Licenses;
 using NuGet.Services.Logging;
 using NuGet.Services.Messaging;
 using NuGet.Services.Messaging.Email;
-using NuGet.Services.Search.Client;
-using NuGet.Services.Search.Client.Correlation;
 using NuGet.Services.ServiceBus;
 using NuGet.Services.Sql;
 using NuGet.Services.Validation;
@@ -47,9 +45,12 @@ using NuGetGallery.Diagnostics;
 using NuGetGallery.Features;
 using NuGetGallery.Infrastructure;
 using NuGetGallery.Infrastructure.Authentication;
+using NuGetGallery.Infrastructure.Lucene;
 using NuGetGallery.Infrastructure.Mail;
 using NuGetGallery.Infrastructure.Search;
+using NuGetGallery.Infrastructure.Search.Correlation;
 using NuGetGallery.Security;
+using Role = NuGet.Services.Entities.Role;
 using SecretReaderFactory = NuGetGallery.Configuration.SecretReader.SecretReaderFactory;
 
 namespace NuGetGallery
@@ -58,11 +59,22 @@ namespace NuGetGallery
     {
         public static class BindingKeys
         {
+            public const string AsyncDeleteAccountName = "AsyncDeleteAccountService";
+            public const string SyncDeleteAccountName = "SyncDeleteAccountService";
+
+            public const string AccountDeleterTopic = "AccountDeleterBindingKey";
             public const string PackageValidationTopic = "PackageValidationBindingKey";
             public const string SymbolsPackageValidationTopic = "SymbolsPackageValidationBindingKey";
             public const string PackageValidationEnqueuer = "PackageValidationEnqueuerBindingKey";
             public const string SymbolsPackageValidationEnqueuer = "SymbolsPackageValidationEnqueuerBindingKey";
             public const string EmailPublisherTopic = "EmailPublisherBindingKey";
+
+            public const string PreviewSearchClient = "PreviewSearchClientBindingKey";
+        }
+
+        public static class ParameterNames
+        {
+            public const string PackagesController_PreviewSearchService = "previewSearchService";
         }
 
         protected override void Load(ContainerBuilder builder)
@@ -85,7 +97,20 @@ namespace NuGetGallery
             var instrumentationKey = configuration.Current.AppInsightsInstrumentationKey;
             if (!string.IsNullOrEmpty(instrumentationKey))
             {
-                TelemetryConfiguration.Active.InstrumentationKey = instrumentationKey;
+                var heartbeatIntervalSeconds = configuration.Current.AppInsightsHeartbeatIntervalSeconds;
+
+                if (heartbeatIntervalSeconds > 0)
+                {
+                    // Configure instrumentation key, heartbeat interval, 
+                    // and register NuGet.Services.Logging.TelemetryContextInitializer.
+                    ApplicationInsights.Initialize(instrumentationKey, TimeSpan.FromSeconds(heartbeatIntervalSeconds));
+                }
+                else
+                {
+                    // Configure instrumentation key,
+                    // and register NuGet.Services.Logging.TelemetryContextInitializer.
+                    ApplicationInsights.Initialize(instrumentationKey);
+                }
             }
 
             var loggerConfiguration = LoggingSetup.CreateDefaultLoggerConfiguration(withConsoleLogger: false);
@@ -138,8 +163,7 @@ namespace NuGetGallery
                 .As<Lucene.Net.Store.Directory>()
                 .SingleInstance();
 
-            ConfigureResilientSearch(loggerFactory, configuration, telemetryService, services);
-            ConfigureSearch(builder, configuration);
+            ConfigureSearch(loggerFactory, configuration, telemetryService, services, builder);
 
             builder.RegisterType<DateTimeProvider>().AsSelf().As<IDateTimeProvider>().SingleInstance();
 
@@ -168,6 +192,11 @@ namespace NuGetGallery
             builder.RegisterType<EntityRepository<User>>()
                 .AsSelf()
                 .As<IEntityRepository<User>>()
+                .InstancePerLifetimeScope();
+
+            builder.RegisterType<EntityRepository<Role>>()
+                .AsSelf()
+                .As<IEntityRepository<Role>>()
                 .InstancePerLifetimeScope();
 
             builder.RegisterType<EntityRepository<ReservedNamespace>>()
@@ -235,15 +264,7 @@ namespace NuGetGallery
                 .As<IEntityRepository<PackageDeprecation>>()
                 .InstancePerLifetimeScope();
 
-            builder.RegisterType<EntityRepository<Cve>>()
-               .AsSelf()
-               .As<IEntityRepository<Cve>>()
-               .InstancePerLifetimeScope();
-
-            builder.RegisterType<EntityRepository<Cwe>>()
-               .AsSelf()
-               .As<IEntityRepository<Cwe>>()
-               .InstancePerLifetimeScope();
+            ConfigureGalleryReadOnlyReplicaEntitiesContext(builder, diagnosticsService, configuration, secretInjector);
 
             var supportDbConnectionFactory = CreateDbConnectionFactory(
                 diagnosticsService,
@@ -276,10 +297,7 @@ namespace NuGetGallery
                 .As<IPackageDeleteService>()
                 .InstancePerLifetimeScope();
 
-            builder.RegisterType<DeleteAccountService>()
-                .AsSelf()
-                .As<IDeleteAccountService>()
-                .InstancePerLifetimeScope();
+            RegisterDeleteAccountService(builder, configuration);
 
             builder.RegisterType<PackageOwnerRequestService>()
                 .AsSelf()
@@ -369,10 +387,6 @@ namespace NuGetGallery
                 .As<ITyposquattingCheckListCacheService>()
                 .SingleInstance();
 
-            builder.Register<ServiceDiscoveryClient>(c =>
-                    new ServiceDiscoveryClient(c.Resolve<IAppConfiguration>().ServiceDiscoveryUri))
-                .As<IServiceDiscoveryClient>();
-
             builder.RegisterType<LicenseExpressionSplitter>()
                 .As<ILicenseExpressionSplitter>()
                 .InstancePerLifetimeScope();
@@ -385,9 +399,32 @@ namespace NuGetGallery
                 .As<ILicenseExpressionSegmentator>()
                 .InstancePerLifetimeScope();
 
+            builder.RegisterType<PackageDeprecationManagementService>()
+                .As<IPackageDeprecationManagementService>()
+                .InstancePerLifetimeScope();
+
             builder.RegisterType<PackageDeprecationService>()
                 .As<IPackageDeprecationService>()
                 .InstancePerLifetimeScope();
+
+            builder.RegisterType<PackageUpdateService>()
+                .As<IPackageUpdateService>()
+                .InstancePerLifetimeScope();
+
+            builder.RegisterType<GalleryCloudBlobContainerInformationProvider>()
+                .As<ICloudBlobContainerInformationProvider>()
+                .InstancePerLifetimeScope();
+
+            builder.RegisterType<ConfigurationIconFileProvider>()
+                .As<IIconUrlProvider>()
+                .InstancePerLifetimeScope();
+
+            builder.RegisterType<IconUrlTemplateProcessor>()
+                .As<IIconUrlTemplateProcessor>()
+                .InstancePerLifetimeScope();
+
+            services.AddHttpClient();
+            services.AddScoped<IGravatarProxyService, GravatarProxyService>();
 
             RegisterFeatureFlagsService(builder, configuration);
             RegisterMessagingService(builder, configuration);
@@ -407,7 +444,7 @@ namespace NuGetGallery
                     defaultAuditingService = GetAuditingServiceForLocalFileSystem(configuration);
                     break;
                 case StorageType.AzureStorage:
-                    ConfigureForAzureStorage(builder, configuration, telemetryClient);
+                    ConfigureForAzureStorage(builder, configuration, telemetryService);
                     defaultAuditingService = GetAuditingServiceForAzureStorage(builder, configuration);
                     break;
             }
@@ -418,11 +455,13 @@ namespace NuGetGallery
 
             RegisterCookieComplianceService(builder, configuration, diagnosticsService);
 
+            RegisterABTestServices(builder);
+
             builder.RegisterType<MicrosoftTeamSubscription>()
                 .AsSelf()
                 .InstancePerLifetimeScope();
 
-            if (configuration.Current.Environment == GalleryConstants.DevelopmentEnvironment)
+            if (configuration.Current.Environment == ServicesConstants.DevelopmentEnvironment)
             {
                 builder.RegisterType<AllowLocalHttpRedirectPolicy>()
                     .As<ISourceDestinationRedirectPolicy>()
@@ -439,6 +478,68 @@ namespace NuGetGallery
             builder.Populate(services);
         }
 
+        private void RegisterABTestServices(ContainerBuilder builder)
+        {
+            builder
+                .RegisterType<ABTestEnrollmentFactory>()
+                .As<IABTestEnrollmentFactory>();
+
+            builder
+                .RegisterType<CookieBasedABTestService>()
+                .As<IABTestService>();
+        }
+
+        private static void RegisterDeleteAccountService(ContainerBuilder builder, ConfigurationService configuration)
+        {
+            if (configuration.Current.AsynchronousDeleteAccountServiceEnabled)
+            {
+                RegisterSwitchingDeleteAccountService(builder, configuration);
+            }
+            else
+            {
+                builder.RegisterType<DeleteAccountService>()
+                    .AsSelf()
+                    .As<IDeleteAccountService>()
+                    .InstancePerLifetimeScope();
+            }
+        }
+
+        private static void RegisterSwitchingDeleteAccountService(ContainerBuilder builder, ConfigurationService configuration)
+        {
+            var asyncAccountDeleteConnectionString = configuration.ServiceBus.AccountDeleter_ConnectionString;
+            var asyncAccountDeleteTopicName = configuration.ServiceBus.AccountDeleter_TopicName;
+
+            builder
+                .Register(c => new TopicClientWrapper(asyncAccountDeleteConnectionString, asyncAccountDeleteTopicName))
+                .SingleInstance()
+                .Keyed<ITopicClient>(BindingKeys.AccountDeleterTopic)
+                .OnRelease(x => x.Close());
+
+            builder
+                .RegisterType<AsynchronousDeleteAccountService>()
+                .WithParameter(new ResolvedParameter(
+                    (pi, ctx) => pi.ParameterType == typeof(ITopicClient),
+                    (pi, ctx) => ctx.ResolveKeyed<ITopicClient>(BindingKeys.AccountDeleterTopic)));
+
+            builder.RegisterType<DeleteAccountService>();
+
+            builder.RegisterType<AccountDeleteMessageSerializer>()
+                .As<IBrokeredMessageSerializer<AccountDeleteMessage>>();
+
+            builder
+                .Register<IDeleteAccountService>(c =>
+                {
+                    var featureFlagService = c.Resolve<IFeatureFlagService>();
+                    if (featureFlagService.IsAsyncAccountDeleteEnabled())
+                    {
+                        return c.Resolve<AsynchronousDeleteAccountService>();
+                    }
+
+                    return c.Resolve<DeleteAccountService>();
+                })
+                .InstancePerLifetimeScope();
+        }
+
         private static void RegisterFeatureFlagsService(ContainerBuilder builder, ConfigurationService configuration)
         {
             builder
@@ -450,7 +551,7 @@ namespace NuGetGallery
                 .SingleInstance();
 
             builder
-                .Register(context => context.Resolve<FeatureFlagFileStorageService>())
+                .Register(context => context.Resolve<EditableFeatureFlagFileStorageService>())
                 .As<IEditableFeatureFlagStorageService>()
                 .SingleInstance();
 
@@ -575,6 +676,26 @@ namespace NuGetGallery
             return Task.Run(() => connectionFactory.CreateAsync()).Result;
         }
 
+        private static void ConfigureGalleryReadOnlyReplicaEntitiesContext(ContainerBuilder builder,
+            IDiagnosticsService diagnostics,
+            ConfigurationService configuration,
+            ISecretInjector secretInjector)
+        {
+            var galleryDbReadOnlyReplicaConnectionFactory = CreateDbConnectionFactory(
+                diagnostics,
+                nameof(ReadOnlyEntitiesContext),
+                configuration.Current.SqlReadOnlyReplicaConnectionString ?? configuration.Current.SqlConnectionString,
+                secretInjector);
+
+            builder.Register(c => new ReadOnlyEntitiesContext(CreateDbConnection(galleryDbReadOnlyReplicaConnectionFactory)))
+                .As<IReadOnlyEntitiesContext>()
+                .InstancePerLifetimeScope();
+
+            builder.RegisterType<ReadOnlyEntityRepository<Package>>()
+                .As<IReadOnlyEntityRepository<Package>>()
+                .InstancePerLifetimeScope();
+        }
+
         private static void ConfigureValidationEntitiesContext(ContainerBuilder builder, IDiagnosticsService diagnostics,
             ConfigurationService configuration, ISecretInjector secretInjector)
         {
@@ -686,32 +807,10 @@ namespace NuGetGallery
                 .InstancePerLifetimeScope();
         }
 
-        private static void ConfigureSearch(ContainerBuilder builder, IGalleryConfigurationService configuration)
+        private static List<(string name, Uri searchUri)> GetSearchClientsFromConfiguration(IGalleryConfigurationService configuration)
         {
-            if (configuration.Current.ServiceDiscoveryUri == null)
-            {
-                builder.RegisterType<LuceneSearchService>()
-                    .AsSelf()
-                    .As<ISearchService>()
-                    .InstancePerLifetimeScope();
-                builder.RegisterType<LuceneIndexingService>()
-                    .AsSelf()
-                    .As<IIndexingService>()
-                    .InstancePerLifetimeScope();
-            }
-            else
-            {
-                builder.RegisterType<ExternalSearchService>()
-                    .AsSelf()
-                    .As<ISearchService>()
-                    .As<IIndexingService>()
-                    .InstancePerLifetimeScope();
-            }
-        }
+            var searchClients = new List<(string name, Uri searchUri)>();
 
-        private static List<(string name,Uri searchUri)> GetSearchClientsFromConfiguration(IGalleryConfigurationService configuration)
-        {
-            List<(string name, Uri searchUri)> searchClients = new List<(string name, Uri searchUri)>();
             if (configuration.Current.SearchServiceUriPrimary != null)
             {
                 searchClients.Add((SearchClientConfiguration.SearchPrimaryInstance, configuration.Current.SearchServiceUriPrimary));
@@ -724,48 +823,211 @@ namespace NuGetGallery
             return searchClients;
         }
 
-        private static void ConfigureResilientSearch(ILoggerFactory loggerFactory, IGalleryConfigurationService configuration, ITelemetryService telemetryService, ServiceCollection services)
+        private static List<(string name, Uri searchUri)> GetPreviewSearchClientsFromConfiguration(IGalleryConfigurationService configuration)
+        {
+            var searchClients = new List<(string name, Uri searchUri)>();
+
+            if (configuration.Current.PreviewSearchServiceUriPrimary != null)
+            {
+                searchClients.Add((SearchClientConfiguration.PreviewSearchPrimaryInstance, configuration.Current.PreviewSearchServiceUriPrimary));
+            }
+            if (configuration.Current.PreviewSearchServiceUriSecondary != null)
+            {
+                searchClients.Add((SearchClientConfiguration.PreviewSearchSecondaryInstance, configuration.Current.PreviewSearchServiceUriSecondary));
+            }
+
+            return searchClients;
+        }
+
+        private static void ConfigureSearch(
+            ILoggerFactory loggerFactory,
+            IGalleryConfigurationService configuration,
+            ITelemetryService telemetryService,
+            ServiceCollection services,
+            ContainerBuilder builder)
         {
             var searchClients = GetSearchClientsFromConfiguration(configuration);
 
             if (searchClients.Count >= 1)
             {
-                var logger = loggerFactory.CreateLogger<SearchClientPolicies>();
                 services.AddTransient<CorrelatingHttpClientHandler>();
                 services.AddTransient((s) => new TracingHttpHandler(DependencyResolver.Current.GetService<IDiagnosticsService>().SafeGetSource("ExternalSearchService")));
 
-                foreach(var searchClient in searchClients)
-                {
-                    // The policy handlers will be applied from the bottom to the top.
-                    // The most inner one is the one added last.
-                    services.AddHttpClient<IHttpClientWrapper, HttpClientWrapper>(searchClient.name, c =>
-                         c.BaseAddress = searchClient.searchUri)
+                // Register the default search service implementation and its dependencies.
+                RegisterSearchService(
+                    loggerFactory,
+                    configuration,
+                    telemetryService,
+                    services,
+                    builder,
+                    searchClients);
+
+                // Register the preview search service and its dependencies with a binding key.
+                var previewSearchClients = GetPreviewSearchClientsFromConfiguration(configuration);
+                RegisterSearchService(
+                    loggerFactory,
+                    configuration,
+                    telemetryService,
+                    services,
+                    builder,
+                    previewSearchClients,
+                    BindingKeys.PreviewSearchClient);
+            }
+            else
+            {
+                builder.RegisterType<LuceneSearchService>()
+                    .AsSelf()
+                    .As<ISearchService>()
+                    .Keyed<ISearchService>(BindingKeys.PreviewSearchClient)
+                    .InstancePerLifetimeScope();
+                builder.RegisterType<LuceneIndexingService>()
+                    .AsSelf()
+                    .As<IIndexingService>()
+                    .As<IIndexingJobFactory>()
+                    .InstancePerLifetimeScope();
+                builder.RegisterType<LuceneDocumentFactory>()
+                    .As<ILuceneDocumentFactory>()
+                    .InstancePerLifetimeScope();
+            }
+
+            builder
+                .Register(c => new SearchSideBySideService(
+                    c.Resolve<ISearchService>(),
+                    c.ResolveKeyed<ISearchService>(BindingKeys.PreviewSearchClient),
+                    c.Resolve<ITelemetryService>(),
+                    c.Resolve<IMessageService>(),
+                    c.Resolve<IMessageServiceConfiguration>(),
+                    c.Resolve<IIconUrlProvider>()))
+                .As<ISearchSideBySideService>()
+                .InstancePerLifetimeScope();
+
+            builder
+                .Register(c => new HijackSearchServiceFactory(
+                    c.Resolve<HttpContextBase>(),
+                    c.Resolve<IFeatureFlagService>(),
+                    c.Resolve<IContentObjectService>(),
+                    c.Resolve<ISearchService>(),
+                    c.ResolveKeyed<ISearchService>(BindingKeys.PreviewSearchClient)))
+                .As<IHijackSearchServiceFactory>()
+                .InstancePerLifetimeScope();
+
+            builder
+                .Register(c => new SearchServiceFactory(
+                    c.Resolve<ISearchService>(),
+                    c.ResolveKeyed<ISearchService>(BindingKeys.PreviewSearchClient)))
+                .As<ISearchServiceFactory>()
+                .InstancePerLifetimeScope();
+        }
+
+        private static void RegisterSearchService(
+            ILoggerFactory loggerFactory,
+            IGalleryConfigurationService configuration,
+            ITelemetryService telemetryService,
+            ServiceCollection services,
+            ContainerBuilder builder,
+            List<(string name, Uri searchUri)> searchClients,
+            string bindingKey = null)
+        {
+            var logger = loggerFactory.CreateLogger<SearchClientPolicies>();
+
+            foreach (var searchClient in searchClients)
+            {
+                // The policy handlers will be applied from the bottom to the top.
+                // The most inner one is the one added last.
+                services
+                    .AddHttpClient<IHttpClientWrapper, HttpClientWrapper>(
+                        searchClient.name,
+                        c =>
+                        {
+                            c.BaseAddress = searchClient.searchUri;
+
+                            // Here we calculate a timeout for HttpClient that allows for all of the retries to occur.
+                            // This  is not strictly necessary today since the timeout exception is not a case that is
+                            // retried but it's best to set this right now instead of the default (100) or something
+                            // too small. The timeout on HttpClient is not really used. Instead, we depend on a timeout
+                            // policy from Polly.
+                            var perRetryMs = configuration.Current.SearchHttpRequestTimeoutInMilliseconds;
+                            var betweenRetryMs = configuration.Current.SearchCircuitBreakerWaitAndRetryIntervalInMilliseconds;
+                            var maxAttempts = configuration.Current.SearchCircuitBreakerWaitAndRetryCount + 1;
+                            var maxMs = (maxAttempts * perRetryMs) + ((maxAttempts - 1) * betweenRetryMs);
+
+                            // Add another timeout on top of the theoretical max to account for CPU time.
+                            maxMs += perRetryMs;
+
+                            c.Timeout = TimeSpan.FromMilliseconds(maxMs);
+                        })
                     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler() { AllowAutoRedirect = true })
                     .AddHttpMessageHandler<CorrelatingHttpClientHandler>()
-                    .AddPolicyHandler(SearchClientPolicies.SearchClientFallBackCircuitBreakerPolicy(logger, searchClient.name, telemetryService))
-                    .AddPolicyHandler(SearchClientPolicies.SearchClientWaitAndRetryPolicy(
-                            configuration.Current.SearchCircuitBreakerWaitAndRetryCount,
-                            configuration.Current.SearchCircuitBreakerWaitAndRetryIntervalInMilliseconds,
-                            logger,
-                            searchClient.name,
-                            telemetryService))
-                    .AddPolicyHandler(SearchClientPolicies.SearchClientCircuitBreakerPolicy(
-                            configuration.Current.SearchCircuitBreakerBreakAfterCount,
-                            TimeSpan.FromSeconds(configuration.Current.SearchCircuitBreakerDelayInSeconds),
-                            logger,
-                            searchClient.name,
-                            telemetryService));
-                }
-                services.AddTransient<IResilientSearchClient, ResilientSearchHttpClient>();
-                services.AddTransient<ISearchClient, GallerySearchClient>();
+                    .AddSearchPolicyHandlers(
+                        logger,
+                        searchClient.name,
+                        telemetryService,
+                        configuration.Current);
+            }
+
+            var registrationBuilder = builder
+                .Register(c =>
+                {
+                    var httpClientFactory = c.Resolve<IHttpClientFactory>();
+                    var httpClientWrapperFactory = c.Resolve<ITypedHttpClientFactory<HttpClientWrapper>>();
+                    var httpClientWrappers = new List<IHttpClientWrapper>(searchClients.Count);
+                    foreach (var searchClient in searchClients)
+                    {
+                        var httpClient = httpClientFactory.CreateClient(searchClient.name);
+                        var httpClientWrapper = httpClientWrapperFactory.CreateClient(httpClient);
+                        httpClientWrappers.Add(httpClientWrapper);
+                    }
+
+                    return new ResilientSearchHttpClient(
+                        httpClientWrappers,
+                        c.Resolve<ILogger<ResilientSearchHttpClient>>(),
+                        c.Resolve<ITelemetryService>());
+                });
+
+            if (bindingKey != null)
+            {
+                registrationBuilder
+                    .Named<IResilientSearchClient>(bindingKey)
+                    .InstancePerLifetimeScope();
+
+                builder
+                    .RegisterType<GallerySearchClient>()
+                    .WithParameter(new ResolvedParameter(
+                        (pi, ctx) => pi.ParameterType == typeof(IResilientSearchClient),
+                        (pi, ctx) => ctx.ResolveKeyed<IResilientSearchClient>(bindingKey)))
+                    .Named<ISearchClient>(bindingKey)
+                    .InstancePerLifetimeScope();
+
+                builder.RegisterType<ExternalSearchService>()
+                    .WithParameter(new ResolvedParameter(
+                        (pi, ctx) => pi.ParameterType == typeof(ISearchClient),
+                        (pi, ctx) => ctx.ResolveKeyed<ISearchClient>(bindingKey)))
+                    .Named<ISearchService>(bindingKey)
+                    .InstancePerLifetimeScope();
+            }
+            else
+            {
+                registrationBuilder
+                    .As<IResilientSearchClient>()
+                    .InstancePerLifetimeScope();
+
+                builder
+                    .RegisterType<GallerySearchClient>()
+                    .As<ISearchClient>()
+                    .InstancePerLifetimeScope();
+
+                builder.RegisterType<ExternalSearchService>()
+                    .AsSelf()
+                    .As<ISearchService>()
+                    .As<IIndexingService>()
+                    .As<IIndexingJobFactory>()
+                    .InstancePerLifetimeScope();
             }
         }
 
-
         private static void ConfigureAutocomplete(ContainerBuilder builder, IGalleryConfigurationService configuration)
         {
-            if (configuration.Current.ServiceDiscoveryUri != null &&
-                !string.IsNullOrEmpty(configuration.Current.AutocompleteServiceResourceType))
+            if (configuration.Current.SearchServiceUriPrimary != null || configuration.Current.SearchServiceUriSecondary != null)
             {
                 builder.RegisterType<AutocompleteServicePackageIdsQuery>()
                     .AsSelf()
@@ -789,19 +1051,6 @@ namespace NuGetGallery
                     .As<IAutocompletePackageVersionsQuery>()
                     .InstancePerLifetimeScope();
             }
-
-            // Vulnerability Autocomplete
-            builder.RegisterType<AutocompleteCveIdsQuery>()
-                .As<IAutocompleteCveIdsQuery>()
-                .InstancePerLifetimeScope();
-
-            builder.RegisterType<AutocompleteCweIdsQuery>()
-                .As<IAutocompleteCweIdsQuery>()
-                .InstancePerLifetimeScope();
-
-            builder.RegisterType<VulnerabilityAutocompleteService>()
-                .As<IVulnerabilityAutocompleteService>()
-                .InstancePerLifetimeScope();
         }
 
         private static void ConfigureForLocalFileSystem(ContainerBuilder builder, IGalleryConfigurationService configuration)
@@ -867,7 +1116,7 @@ namespace NuGetGallery
             return new FileSystemAuditingService(auditingPath, AuditActor.GetAspNetOnBehalfOfAsync);
         }
 
-        private static void ConfigureForAzureStorage(ContainerBuilder builder, IGalleryConfigurationService configuration, ITelemetryClient telemetryClient)
+        private static void ConfigureForAzureStorage(ContainerBuilder builder, IGalleryConfigurationService configuration, ITelemetryService telemetryService)
         {
             /// The goal here is to initialize a <see cref="ICloudBlobClient"/> and <see cref="IFileStorageService"/>
             /// instance for each unique connection string. Each dependent of <see cref="IFileStorageService"/> (that
@@ -886,6 +1135,8 @@ namespace NuGetGallery
                        .SingleInstance()
                        .Keyed<ICloudBlobClient>(dependent.BindingKey);
 
+                    // Do not register the service as ICloudStorageStatusDependency because
+                    // the CloudAuditingService registers it and the gallery uses the same storage account for all the containers.
                     builder.RegisterType<CloudBlobFileStorageService>()
                         .WithParameter(new ResolvedParameter(
                            (pi, ctx) => pi.ParameterType == typeof(ICloudBlobClient),
@@ -893,7 +1144,6 @@ namespace NuGetGallery
                         .AsSelf()
                         .As<IFileStorageService>()
                         .As<ICoreFileStorageService>()
-                        .As<ICloudStorageStatusDependency>()
                         .SingleInstance()
                         .Keyed<IFileStorageService>(dependent.BindingKey);
                 }
@@ -925,12 +1175,11 @@ namespace NuGetGallery
             builder.RegisterInstance(new CloudReportService(configuration.Current.AzureStorage_Statistics_ConnectionString, configuration.Current.AzureStorageReadAccessGeoRedundant))
                 .AsSelf()
                 .As<IReportService>()
-                .As<ICloudStorageStatusDependency>()
                 .SingleInstance();
 
             // when running on Windows Azure, download counts come from the downloads.v1.json blob
             var downloadCountService = new CloudDownloadCountService(
-                telemetryClient,
+                telemetryService,
                 configuration.Current.AzureStorage_Statistics_ConnectionString,
                 configuration.Current.AzureStorageReadAccessGeoRedundant);
 
@@ -938,7 +1187,7 @@ namespace NuGetGallery
                 .AsSelf()
                 .As<IDownloadCountService>()
                 .SingleInstance();
-            ObjectMaterializedInterception.AddInterceptor(new DownloadCountObjectMaterializedInterceptor(downloadCountService));
+            ObjectMaterializedInterception.AddInterceptor(new DownloadCountObjectMaterializedInterceptor(downloadCountService, telemetryService));
 
             builder.RegisterType<JsonStatisticsService>()
                 .AsSelf()

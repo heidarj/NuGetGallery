@@ -23,6 +23,7 @@ namespace NuGetGallery.Areas.Admin.Controllers
         public virtual ActionResult Index()
         {
             var viewModel = new HomeViewModel(
+                showDatabaseAdmin: _config.Current.AdminPanelDatabaseAccessEnabled,
                 showValidation: _config.Current.AsynchronousPackageValidationEnabled);
 
             return View(viewModel);
@@ -34,7 +35,8 @@ namespace NuGetGallery.Areas.Admin.Controllers
             throw new Exception("KA BOOM!");
         }
 
-        [HttpGet]
+        [HttpPost]
+        [ValidateAntiForgeryToken]
         public virtual ActionResult ClearContentCache()
         {
             _content.ClearCache();

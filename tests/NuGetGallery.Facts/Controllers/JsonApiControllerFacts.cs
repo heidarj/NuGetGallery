@@ -355,9 +355,15 @@ namespace NuGetGallery.Controllers
                             var package = fakes.Package;
                             var controller = GetController<JsonApiController>();
                             controller.SetCurrentUser(currentUser);
+                            AddPackageOwnerViewModel testData = new AddPackageOwnerViewModel
+                            {
+                                Id = package.Id,
+                                Username = usernameToAdd,
+                                Message = "a message"
+                            };
 
                             // Act
-                            var result = await controller.AddPackageOwner(package.Id, usernameToAdd, "a message");
+                            var result = await controller.AddPackageOwner(testData);
                             dynamic data = result.Data;
 
                             // Assert
@@ -444,8 +450,15 @@ namespace NuGetGallery.Controllers
                                         .Verifiable();
                                 }
                             }
+                            AddPackageOwnerViewModel testData = new AddPackageOwnerViewModel
+                            {
+                                Id = fakes.Package.Id,
+                                Username = userToAdd.Username,
+                                Message = "Hello World! Html Encoded <3"
+                            };
 
-                            JsonResult result = await controller.AddPackageOwner(fakes.Package.Id, userToAdd.Username, "Hello World! Html Encoded <3");
+
+                            JsonResult result = await controller.AddPackageOwner(testData);
                             dynamic data = result.Data;
                             PackageOwnersResultViewModel model = data.model;
 
@@ -679,7 +692,14 @@ namespace NuGetGallery.Controllers
 
                 private static async Task<ActionResult> AddPackageOwner(JsonApiController jsonApiController, string packageId, string username)
                 {
-                    return await jsonApiController.AddPackageOwner(packageId, username, "message");
+                    AddPackageOwnerViewModel testData = new AddPackageOwnerViewModel
+                    {
+                        Id = packageId,
+                        Username = username,
+                        Message = "message"
+                    };
+
+                    return await jsonApiController.AddPackageOwner(testData);
                 }
 
                 private static async Task<ActionResult> RemovePackageOwner(JsonApiController jsonApiController, string packageId, string username)
@@ -801,6 +821,42 @@ namespace NuGetGallery.Controllers
 
                     Assert.Contains(result, m => ModelMatchesUser(m, fakes.Owner, grantsCurrentUserAccess: false, isCurrentUserAdminOfOrganization: false));
                     Assert.Contains(result, m => ModelMatchesUser(m, fakes.OrganizationOwner, grantsCurrentUserAccess: true, isCurrentUserAdminOfOrganization: true));
+                }
+
+                [Fact]
+                public void UsesGravatarIfProxyingDisabled()
+                {
+                    GetMock<IFeatureFlagService>()
+                        .Setup(f => f.IsGravatarProxyEnabled())
+                        .Returns(false);
+
+                    var fakes = Get<Fakes>();
+                    var currentUser = fakes.Owner;
+                    var result = InvokeAsUser(currentUser).ToList();
+
+                    Assert.Equal(2, result.Count);
+                    Assert.Equal(
+                        "https://secure.gravatar.com/avatar/f97acb220d5765fc9d56e45f826b9fc2?s=64&r=g&d=retro",
+                        result[0].ImageUrl);
+                    Assert.Equal(
+                        "https://secure.gravatar.com/avatar/5ed91983fd0fc9a6df3d7c1a2a050290?s=64&r=g&d=retro",
+                        result[1].ImageUrl);
+                }
+
+                [Fact]
+                public void ProxiesGravatar()
+                {
+                    GetMock<IFeatureFlagService>()
+                        .Setup(f => f.IsGravatarProxyEnabled())
+                        .Returns(true);
+
+                    var fakes = Get<Fakes>();
+                    var currentUser = fakes.Owner;
+                    var result = InvokeAsUser(currentUser).ToList();
+
+                    Assert.Equal(2, result.Count);
+                    Assert.Equal("/profiles/testPackageOwner/avatar?imageSize=64", result[0].ImageUrl);
+                    Assert.Equal("/profiles/testOrganizationOwner/avatar?imageSize=64", result[1].ImageUrl);
                 }
 
                 private IEnumerable<PackageOwnersResultViewModel> InvokeAsUser(User currentUser)

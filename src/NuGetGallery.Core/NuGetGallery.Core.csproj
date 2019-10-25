@@ -1,6 +1,7 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="15.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
+  <Import Project="..\..\sign.thirdparty.props" />
   <PropertyGroup>
     <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
     <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
@@ -9,7 +10,7 @@
     <AppDesignerFolder>Properties</AppDesignerFolder>
     <RootNamespace>NuGetGallery</RootNamespace>
     <AssemblyName>NuGetGallery.Core</AssemblyName>
-    <TargetFrameworkVersion>v4.6.2</TargetFrameworkVersion>
+    <TargetFrameworkVersion>v4.7.2</TargetFrameworkVersion>
     <FileAlignment>512</FileAlignment>
     <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
     <RuntimeIdentifier>win</RuntimeIdentifier>
@@ -62,8 +63,13 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Auditing\AggregateAuditingService.cs" />
+    <Compile Include="Auditing\AuditedEntities\AuditedFeatureFlagFlight.cs" />
+    <Compile Include="Auditing\AuditedEntities\AuditedFeatureFlagFeature.cs" />
+    <Compile Include="Auditing\AuditedFeatureFlagsAction.cs" />
     <Compile Include="Auditing\AuditedCertificateAction.cs" />
     <Compile Include="Auditing\AuditedDeleteAccountAction.cs" />
+    <Compile Include="Auditing\AuditedEntities\AuditedPackageDeprecation.cs" />
+    <Compile Include="Auditing\FeatureFlagsAuditRecord.cs" />
     <Compile Include="Auditing\CertificateAuditRecord.cs" />
     <Compile Include="Auditing\Obfuscation\ObfuscateAttribute.cs" />
     <Compile Include="Auditing\Obfuscation\ObfuscationType.cs" />
@@ -114,11 +120,13 @@
     <Compile Include="DisposableAction.cs" />
     <Compile Include="Entities\DatabaseWrapper.cs" />
     <Compile Include="Entities\DbContextTransactionWrapper.cs" />
+    <Compile Include="Entities\ReadOnlyEntitiesContext.cs" />
+    <Compile Include="Entities\IReadOnlyEntitiesContext.cs" />
+    <Compile Include="Entities\ReadOnlyEntityRepository.cs" />
     <Compile Include="Entities\IDatabase.cs" />
     <Compile Include="Entities\IDbContextTransaction.cs" />
     <Compile Include="Entities\EntitiesConfiguration.cs" />
     <Compile Include="Entities\EntitiesContext.cs" />
-    <Compile Include="Entities\EntityException.cs" />
     <Compile Include="Entities\Interception\ObjectMaterializedInterception.cs" />
     <Compile Include="Entities\Interception\ObjectMaterializedInterceptingDbContext.cs" />
     <Compile Include="Entities\EntityRepository.cs" />
@@ -126,19 +134,25 @@
     <Compile Include="Entities\IEntitiesContext.cs" />
     <Compile Include="Entities\Interception\IObjectMaterializedInterceptor.cs" />
     <Compile Include="Entities\IEntityRepository.cs" />
+    <Compile Include="Entities\IReadOnlyEntityRepository.cs" />
     <Compile Include="Entities\ReadOnlyModeException.cs" />
     <Compile Include="Entities\SuspendDbExecutionStrategy.cs" />
+    <Compile Include="Extensions\DiagnosticsSourceExtensions.cs" />
     <Compile Include="Extensions\EntitiesContextExtensions.cs" />
     <Compile Include="Extensions\PackageValidationSetExtensions.cs" />
     <Compile Include="Extensions\StorageExceptionExtensions.cs" />
     <Compile Include="Extensions\UserExtensionsCore.cs" />
     <Compile Include="Extensions\ValidationIssueExtensions.cs" />
-    <Compile Include="Features\FeatureFlagFileStorageService.cs" />
+    <Compile Include="Features\EditableFeatureFlagFileStorageService.cs" />
     <Compile Include="Features\FeatureFlagClientExtensions.cs" />
+    <Compile Include="Features\FeatureFlagFileStorageService.cs" />
     <Compile Include="Features\FeatureFlagReference.cs" />
     <Compile Include="Features\FeatureFlagSaveResult.cs" />
-    <Compile Include="Features\FeatureFlagSaveResultType.cs" />
     <Compile Include="Features\IEditableFeatureFlagStorageService.cs" />
+    <Compile Include="GitHub\GitHubUsageConfiguration.cs" />
+    <Compile Include="GitHub\IGitHubUsageConfiguration.cs" />
+    <Compile Include="GitHub\NuGetPackageGitHubInformation.cs" />
+    <Compile Include="GitHub\RepositoryInformation.cs" />
     <Compile Include="ICloudStorageStatusDependency.cs" />
     <Compile Include="Infrastructure\AzureEntityList.cs" />
     <Compile Include="Infrastructure\ElmahException.cs" />
@@ -149,6 +163,7 @@
     <Compile Include="Infrastructure\Mail\Messages\SymbolPackageAddedMessage.cs" />
     <Compile Include="Infrastructure\Mail\Messages\SymbolPackageValidationFailedMessage.cs" />
     <Compile Include="Infrastructure\Mail\Messages\SymbolPackageValidationTakingTooLongMessage.cs" />
+    <Compile Include="Infrastructure\MessageQueue.cs" />
     <Compile Include="Infrastructure\TableErrorLog.cs" />
     <Compile Include="Authentication\NuGetClaims.cs" />
     <Compile Include="PackageMetadataExtensions.cs" />
@@ -175,8 +190,11 @@
     <Compile Include="Services\CorePackageService.cs" />
     <Compile Include="Services\CryptographyService.cs" />
     <Compile Include="Services\FileNameHelper.cs" />
+    <Compile Include="Services\GalleryCloudBlobContainerInformationProvider.cs" />
+    <Compile Include="Services\ICloudBlobContainerInformationProvider.cs" />
     <Compile Include="Services\IContentFileMetadataService.cs" />
     <Compile Include="Services\ICoreLicenseFileService.cs" />
+    <Compile Include="Services\IStringTemplateProcessor.cs" />
     <Compile Include="Services\PackageAlreadyExistsException.cs" />
     <Compile Include="Services\FileAlreadyExistsException.cs" />
     <Compile Include="Services\FileUriPermissions.cs" />
@@ -192,6 +210,7 @@
     <Compile Include="Services\IRevalidationStateService.cs" />
     <Compile Include="Services\ISimpleCloudBlob.cs" />
     <Compile Include="Services\PackageDeprecationFieldsToInclude.cs" />
+    <Compile Include="Services\StringReplaceTemplateProcessor.cs" />
     <Compile Include="Services\SymbolPackageFileServiceMetadata.cs" />
     <Compile Include="Services\PackageFileServiceMetadata.cs" />
     <Compile Include="Services\RevalidationState.cs" />
@@ -219,20 +238,17 @@
     <EmbeddedResource Include="Infrastructure\MigrateUserToOrganization.sql" />
   </ItemGroup>
   <ItemGroup>
-    <PackageReference Include="NuGet.Services.Entities">
-      <Version>2.43.0</Version>
-    </PackageReference>
     <PackageReference Include="NuGet.Services.FeatureFlags">
-      <Version>2.43.0</Version>
+      <Version>2.58.0</Version>
     </PackageReference>
     <PackageReference Include="NuGet.Services.Messaging.Email">
-      <Version>2.43.0</Version>
+      <Version>2.58.0</Version>
     </PackageReference>
     <PackageReference Include="NuGet.Services.Validation">
-      <Version>2.43.0</Version>
+      <Version>2.58.0</Version>
     </PackageReference>
     <PackageReference Include="NuGet.Services.Validation.Issues">
-      <Version>2.43.0</Version>
+      <Version>2.58.0</Version>
     </PackageReference>
     <PackageReference Include="NuGet.StrongName.AnglicanGeek.MarkdownMailer">
       <Version>1.2.0</Version>
@@ -241,7 +257,7 @@
       <Version>1.2.2</Version>
     </PackageReference>
     <PackageReference Include="EntityFramework">
-      <Version>6.1.3</Version>
+      <Version>6.2.0</Version>
     </PackageReference>
     <PackageReference Include="MicroBuild.Core">
       <Version>0.3.0</Version>
@@ -252,10 +268,7 @@
       <Version>1.0.0</Version>
     </PackageReference>
     <PackageReference Include="Microsoft.Data.Services.Client">
-      <Version>5.7.0</Version>
-    </PackageReference>
-    <PackageReference Include="Newtonsoft.Json">
-      <Version>9.0.1</Version>
+      <Version>5.8.4</Version>
     </PackageReference>
     <PackageReference Include="Microsoft.WindowsAzure.ConfigurationManager">
       <Version>3.1.0</Version>
@@ -268,7 +281,7 @@
       <Version>5.0.0-preview1.5665</Version>
     </PackageReference>
     <PackageReference Include="WindowsAzure.Storage">
-      <Version>7.1.2</Version>
+      <Version>9.3.3</Version>
     </PackageReference>
   </ItemGroup>
   <ItemGroup>

@@ -23,20 +23,26 @@ namespace NuGetGallery.Controllers
     {
         private const int MaxPageSize = SearchAdaptor.MaxPageSize;
 
-        private readonly IEntityRepository<Package> _packagesRepository;
+        private readonly IReadOnlyEntityRepository<Package> _packagesRepository;
+        private readonly IEntityRepository<Package> _readWritePackagesRepository;
         private readonly IGalleryConfigurationService _configurationService;
-        private readonly ISearchService _searchService;
+        private readonly IHijackSearchServiceFactory _searchServiceFactory;
+        private readonly IFeatureFlagService _featureFlagService;
 
         public ODataV1FeedController(
-            IEntityRepository<Package> packagesRepository,
+            IReadOnlyEntityRepository<Package> packagesRepository,
+            IEntityRepository<Package> readWritePackagesRepository,
             IGalleryConfigurationService configurationService,
-            ISearchService searchService,
-            ITelemetryService telemetryService)
+            IHijackSearchServiceFactory searchServiceFactory,
+            ITelemetryService telemetryService,
+            IFeatureFlagService featureFlagService)
             : base(configurationService, telemetryService)
         {
-            _packagesRepository = packagesRepository;
-            _configurationService = configurationService;
-            _searchService = searchService;
+            _packagesRepository = packagesRepository ?? throw new ArgumentNullException(nameof(packagesRepository));
+            _readWritePackagesRepository = readWritePackagesRepository ?? throw new ArgumentNullException(nameof(readWritePackagesRepository));
+            _configurationService = configurationService ?? throw new ArgumentNullException(nameof(configurationService));
+            _searchServiceFactory = searchServiceFactory ?? throw new ArgumentNullException(nameof(searchServiceFactory));
+            _featureFlagService = featureFlagService ?? throw new ArgumentNullException(nameof(featureFlagService));
         }
 
         // /api/v1/Packages
@@ -50,12 +56,12 @@ namespace NuGetGallery.Controllers
             {
                 return BadRequest(ODataQueryVerifier.GetValidationFailedMessage(options));
             }
-            var queryable = _packagesRepository.GetAll()
-                                .Where(p => !p.IsPrerelease && p.PackageStatusKey == PackageStatus.Available)
-                                .Where(SemVerLevelKey.IsUnknownPredicate())
-                                .WithoutSortOnColumn(Version)
-                                .WithoutSortOnColumn(Id, ShouldIgnoreOrderById(options))
-                                .ToV1FeedPackageQuery(_configurationService.GetSiteRoot(UseHttps()));
+            var queryable = GetAll()
+                            .Where(p => !p.IsPrerelease && p.PackageStatusKey == PackageStatus.Available)
+                            .Where(SemVerLevelKey.IsUnknownPredicate())
+                            .WithoutSortOnColumn(Version)
+                            .WithoutSortOnColumn(Id, ShouldIgnoreOrderById(options))
+                            .ToV1FeedPackageQuery(_configurationService.GetSiteRoot(UseHttps()));
 
             return TrackedQueryResult(options, queryable, MaxPageSize, customQuery: true);
         }
@@ -97,7 +103,7 @@ namespace NuGetGallery.Controllers
 
         private async Task<IHttpActionResult> GetCore(ODataQueryOptions<V1FeedPackage> options, string id, string version, bool return404NotFoundWhenNoResults)
         {
-            var packages = _packagesRepository.GetAll()
+            var packages = GetAll()
                 .Include(p => p.PackageRegistration)
                 .Where(p => p.PackageRegistration.Id.Equals(id, StringComparison.OrdinalIgnoreCase)
                             && !p.IsPrerelease
@@ -114,8 +120,9 @@ namespace NuGetGallery.Controllers
             // try the search service
             try
             {
+                var searchService = _searchServiceFactory.GetService();
                 var searchAdaptorResult = await SearchAdaptor.FindByIdAndVersionCore(
-                    _searchService,
+                    searchService,
                     GetTraditionalHttpContext().Request,
                     packages,
                     id,
@@ -213,7 +220,7 @@ namespace NuGetGallery.Controllers
             }
 
             // Perform actual search
-            var packages = _packagesRepository.GetAll()
+            var packages = GetAll()
                 .Include(p => p.PackageRegistration)
                 .Include(p => p.PackageRegistration.Owners)
                 .Where(p => p.Listed && !p.IsPrerelease && p.PackageStatusKey == PackageStatus.Available)
@@ -222,8 +229,9 @@ namespace NuGetGallery.Controllers
                 .AsNoTracking();
 
             // todo: search hijack should take queryOptions instead of manually parsing query options
+            var searchService = _searchServiceFactory.GetService();
             var searchAdaptorResult = await SearchAdaptor.SearchCore(
-                _searchService,
+                searchService,
                 GetTraditionalHttpContext().Request,
                 packages,
                 searchTerm,
@@ -280,6 +288,15 @@ namespace NuGetGallery.Controllers
         {
             var searchResults = await Search(options, searchTerm, targetFramework);
             return searchResults.FormattedAsCountResult<V1FeedPackage>();
+        }
+
+        internal IQueryable<Package> GetAll()
+        {
+            if (_featureFlagService.IsODataDatabaseReadOnlyEnabled())
+            {
+                return _packagesRepository.GetAll();
+            }
+            return _readWritePackagesRepository.GetAll();
         }
     }
 }

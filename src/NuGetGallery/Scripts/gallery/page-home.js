@@ -22,12 +22,10 @@ $(function () {
     });
 
     function showModal() {
-        $(document).on('ready', function (e) {
-            $("#popUpModal").modal({
-                show: true,
-                focus: true
-            });
-        })
+        $("#popUpModal").modal({
+            show: true,
+            focus: true
+        });
     };
 
     function updateStats() {
@@ -37,7 +35,7 @@ $(function () {
                 updateStat(stats.packageVersions, data['TotalPackages']);
                 updateStat(stats.uniquePackages, data['UniquePackages']);
             })
-            .error(function () {
+            .fail(function () {
                 // Fail silently.
             });
     }

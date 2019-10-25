@@ -20,7 +20,7 @@ namespace NuGetGallery
     public class OrganizationsController
         : AccountsController<Organization, OrganizationAccountViewModel>
     {
-        public IDeleteAccountService DeleteAccountService { get; }
+        private readonly IFeatureFlagService _features;
 
         public OrganizationsController(
             AuthenticationService authService,
@@ -32,7 +32,10 @@ namespace NuGetGallery
             IPackageService packageService,
             IDeleteAccountService deleteAccountService,
             IContentObjectService contentObjectService,
-            IMessageServiceConfiguration messageServiceConfiguration)
+            IMessageServiceConfiguration messageServiceConfiguration,
+            IIconUrlProvider iconUrlProvider,
+            IFeatureFlagService features,
+            IGravatarProxyService gravatarProxy)
             : base(
                   authService,
                   packageService,
@@ -42,9 +45,12 @@ namespace NuGetGallery
                   securityPolicyService,
                   certificateService,
                   contentObjectService,
-                  messageServiceConfiguration)
+                  messageServiceConfiguration,
+                  deleteAccountService,
+                  iconUrlProvider,
+                  gravatarProxy)
         {
-            DeleteAccountService = deleteAccountService;
+            _features = features ?? throw new ArgumentNullException(nameof(features));
         }
 
         public override string AccountAction => nameof(ManageOrganization);
@@ -155,11 +161,10 @@ namespace NuGetGallery
                     account,
                     currentUser,
                     request.NewMember,
-                    request.IsAdmin,
-                    cancellationUrl: Url.CancelOrganizationMembershipRequest(memberName, relativeUrl: false));
+                    request.IsAdmin);
                 await MessageService.SendMessageAsync(organizationMembershipRequestInitiatedMessage);
 
-                return Json(new OrganizationMemberViewModel(request));
+                return Json(ToOrganizationMemberViewModel(request));
             }
             catch (EntityException e)
             {
@@ -169,13 +174,31 @@ namespace NuGetGallery
 
         [HttpGet]
         [UIAuthorize]
+        public async Task<ActionResult> ConfirmMemberRequestRedirect(string accountName, string confirmationToken)
+        {
+            return await ConfirmMemberRequestAsync(accountName, confirmationToken, redirect: true);
+        }
+
+        [HttpPost]
+        [UIAuthorize]
+        [ValidateAntiForgeryToken]
         public async Task<ActionResult> ConfirmMemberRequest(string accountName, string confirmationToken)
+        {
+            return await ConfirmMemberRequestAsync(accountName, confirmationToken, redirect: false);
+        }
+
+        private async Task<ActionResult> ConfirmMemberRequestAsync(string accountName, string confirmationToken, bool redirect)
         {
             var account = GetAccount(accountName);
 
             if (account == null)
             {
                 return new HttpStatusCodeResult(HttpStatusCode.NotFound);
+            }
+
+            if (redirect)
+            {
+                return Redirect(Url.ManageMyOrganizations());
             }
 
             try
@@ -198,13 +221,31 @@ namespace NuGetGallery
 
         [HttpGet]
         [UIAuthorize]
+        public async Task<ActionResult> RejectMemberRequestRedirect(string accountName, string confirmationToken)
+        {
+            return await RejectMemberRequestAsync(accountName, confirmationToken, redirect: true);
+        }
+
+        [HttpPost]
+        [UIAuthorize]
+        [ValidateAntiForgeryToken]
         public async Task<ActionResult> RejectMemberRequest(string accountName, string confirmationToken)
+        {
+            return await RejectMemberRequestAsync(accountName, confirmationToken, redirect: false);
+        }
+
+        private async Task<ActionResult> RejectMemberRequestAsync(string accountName, string confirmationToken, bool redirect)
         {
             var account = GetAccount(accountName);
 
             if (account == null)
             {
                 return new HttpStatusCodeResult(HttpStatusCode.NotFound);
+            }
+
+            if (redirect)
+            {
+                return Redirect(Url.ManageMyOrganizations());
             }
 
             try
@@ -281,7 +322,7 @@ namespace NuGetGallery
                 var emailMessage = new OrganizationMemberUpdatedMessage(MessageServiceConfiguration, account, membership);
                 await MessageService.SendMessageAsync(emailMessage);
 
-                return Json(new OrganizationMemberViewModel(membership));
+                return Json(ToOrganizationMemberViewModel(membership));
             }
             catch (EntityException e)
             {
@@ -326,14 +367,31 @@ namespace NuGetGallery
             }
         }
 
-        protected override DeleteAccountViewModel<Organization> GetDeleteAccountViewModel(Organization account)
+        protected override string GetDeleteAccountViewName() => "DeleteOrganizationAccount";
+
+        protected override DeleteAccountViewModel GetDeleteAccountViewModel(Organization account)
         {
             return GetDeleteOrganizationViewModel(account);
         }
 
         private DeleteOrganizationViewModel GetDeleteOrganizationViewModel(Organization account)
         {
-            return new DeleteOrganizationViewModel(account, GetCurrentUser(), PackageService);
+            var currentUser = base.GetCurrentUser();
+
+            var members = account.Members
+                .Select(ToOrganizationMemberViewModel)
+                .ToList();
+
+            var additionalMembers = account.Members
+                .Where(m => !m.Member.MatchesUser(currentUser))
+                .Select(ToOrganizationMemberViewModel)
+                .ToList();
+
+            return new DeleteOrganizationViewModel(
+                account,
+                GetOwnedPackagesViewModels(account),
+                members,
+                additionalMembers);
         }
 
         [HttpPost]
@@ -367,7 +425,7 @@ namespace NuGetGallery
                 return RedirectToAction(nameof(DeleteRequest));
             }
 
-            var result = await DeleteAccountService.DeleteAccountAsync(account, currentUser, commitAsTransaction: true);
+            var result = await DeleteAccountService.DeleteAccountAsync(account, currentUser);
 
             if (result.Success)
             {
@@ -387,12 +445,11 @@ namespace NuGetGallery
         {
             base.UpdateAccountViewModel(account, model);
 
-            model.Members =
-                account.Members.Select(m => new OrganizationMemberViewModel(m))
-                .Concat(account.MemberRequests.Select(m => new OrganizationMemberViewModel(m)));
+            var memberViewModels = account.Members.Select(ToOrganizationMemberViewModel);
+            var memberRequestViewModels = account.MemberRequests.Select(ToOrganizationMemberViewModel);
 
+            model.Members = memberViewModels.Concat(memberRequestViewModels);
             model.RequiresTenant = account.IsRestrictedToOrganizationTenantPolicy();
-
             model.CanManageMemberships =
                 ActionsRequiringPermissions.ManageMembership.CheckPermissions(GetCurrentUser(), account)
                     == PermissionsCheckResult.Allowed;
@@ -401,6 +458,26 @@ namespace NuGetGallery
         protected override RouteUrlTemplate<string> GetDeleteCertificateForAccountTemplate(string accountName)
         {
             return Url.DeleteOrganizationCertificateTemplate(accountName);
+        }
+
+        private OrganizationMemberViewModel ToOrganizationMemberViewModel(Membership membership)
+        {
+            var avatarUrl = Url.Avatar(
+                membership.Member,
+                _features.IsGravatarProxyEnabled(),
+                GalleryConstants.GravatarElementSize);
+
+            return new OrganizationMemberViewModel(membership, avatarUrl);
+        }
+
+        private OrganizationMemberViewModel ToOrganizationMemberViewModel(MembershipRequest membershipRequest)
+        {
+            var avatarUrl = Url.Avatar(
+                membershipRequest.NewMember,
+                _features.IsGravatarProxyEnabled(),
+                GalleryConstants.GravatarElementSize);
+
+            return new OrganizationMemberViewModel(membershipRequest, avatarUrl);
         }
     }
 }

@@ -1,190 +1,6 @@
 ﻿'use strict';
 
-function ManageDeprecationSecurityDetailListItemViewModel(id, fromAutocomplete, name, description, cvss) {
-    this.id = id;
-    this.fromAutocomplete = fromAutocomplete;
-    this.name = name;
-    this.description = description;
-    this.cvss = cvss;
-}
-
-// Shared model between the CVE view and the CWE view
-function ManageDeprecationSecurityDetailListViewModel(id, title, label, placeholder, addLabel, addRegex, addErrorString, getUrlFromId, autocompleteUrl, processAutocompleteResult, updateCvssFromItem, allowMissingFromAutocomplete, missingFromAutocompleteErrorTemplate, missingAutocompleteName, missingAutocompleteDescription) {
-    var self = this;
-
-    this.id = id;
-    this.title = title;
-    this.label = label;
-    this.placeholder = placeholder;
-    this.getUrlFromId = getUrlFromId;
-    this.missingAutocompleteName = missingAutocompleteName;
-    this.missingAutocompleteDescription = missingAutocompleteDescription;
-
-    // Whether or not the checkbox for this section is checked.
-    this.hasIds = ko.observable(false);
-
-    // The IDs that the user has added to this form.
-    this.addedIds = ko.observableArray();
-    // The IDs to submit with the form.
-    this.ids = ko.pureComputed(function () {
-        if (self.hasIds()) {
-            return self.addedIds();
-        } else {
-            // If the checkbox for this section is not selected, do not return the added IDs.
-            return [];
-        }
-    }, this);
-
-    // The ID that has been typed into the textbox but not yet submitted.
-    this.addId = ko.observable('');
-    this.addLabel = addLabel;
-    this.addError = ko.observable('');
-
-    this.showAutocompleteResults = ko.observable(true);
-    var autocompleteSelector = "#" + id + "-autocomplete";
-    window.nuget.configureDropdown(
-        ":has(> " + autocompleteSelector + ")",
-        autocompleteSelector,
-        self.showAutocompleteResults,
-        true);
-
-    this.autocompleteResults = ko.observableArray();
-    this.addId.subscribe(function () {
-        self.addError('');
-
-        var query = self.addId();
-        $.ajax({
-            url: autocompleteUrl,
-            dataType: 'json',
-            type: 'GET',
-            data: {
-                query: query
-            },
-
-            success: function (data) {
-                if (query !== self.addId()) {
-                    // Don't set the autocomplete results if the ID in the box has changed.
-                    return;
-                }
-
-                if (!data.Success) {
-                    self.autocompleteResults([]);
-                    return;
-                }
-
-                self.autocompleteResults(
-                    data.Results.map(processAutocompleteResult));
-            },
-
-            error: function () {
-                if (query !== self.addId()) {
-                    // Don't set the autocomplete results if the ID in the box has changed.
-                    return;
-                }
-
-                self.autocompleteResults([]);
-            }
-        });
-    }, this);
-
-    this.add = function (addedItemViewModel) {
-        var id = addedItemViewModel.id;
-        if (!id.match(addRegex)) {
-            self.addError("'" + id + "' is not a valid ID! " + addErrorString);
-            return;
-        }
-
-        if (ko.utils.arrayFirst(self.addedIds(), function (item) { return item.id === id; })) {
-            self.addError("'" + id + "' has already been added!");
-            return;
-        }
-
-        self.addedIds.push(addedItemViewModel);
-        self.addId('');
-        updateCvssFromItem(addedItemViewModel);
-
-        $(autocompleteSelector).find('[name="addId"]').focus();
-    };
-
-    this.addWithAutocomplete = function (item) {
-        self.add(item);
-    };
-
-    this.addWithoutAutocomplete = function () {
-        // Uppercase the ID because CVE and CWE IDs are case-insensitive.
-        // If the user enters 'cve-2019-0001' instead of 'CVE-2019-0001', we shouldn't fail.
-        var addedId = self.addId().toUpperCase();
-
-        // If there is an autocomplete result with the same ID, use it.
-        var matchingAutocompleteResult = ko.utils.arrayFirst(
-            self.autocompleteResults(),
-            function (result) { return result.id === addedId; });
-
-        var addedItem;
-        if (matchingAutocompleteResult) {
-            addedItem = matchingAutocompleteResult;
-        } else {
-            if (!allowMissingFromAutocomplete) {
-                self.addError(window.nuget.formatString(
-                    missingFromAutocompleteErrorTemplate,
-                    addedId));
-                return;
-            }
-
-            addedItem = new ManageDeprecationSecurityDetailListItemViewModel(addedId, false);
-        }
-
-        self.add(addedItem);
-    };
-
-    this.addWithoutAutocompleteKeyDown = function (data, event) {
-        if (event.which === 13) { /* Enter */
-            self.addWithoutAutocomplete();
-            return false;
-        }
-
-        return true;
-    };
-
-    this.remove = function (id, event) {
-        var $target = $(event.target);
-
-        // Try to focus on the next added item.
-        var nextItem = $target.closest('.security-detail-list-item').next('.security-detail-list-item');
-        if (nextItem.length) {
-            nextItem.find(':tabbable').focus();
-        } else {
-            // Otherwise, focus on the "add item" input.
-            $target.closest('.security-detail').find('[name="addId"]').focus();
-        }
-
-        self.addedIds.remove(id);
-    };
-
-    // Import the existing version deprecation state into this model.
-    this.import = function (ids) {
-        var hasIds = ids && ids.length;
-        self.hasIds(hasIds);
-        if (hasIds) {
-            self.addedIds(ids);
-        } else {
-            self.addedIds.removeAll();
-        }
-    };
-
-    // Export this model into an array of IDs.
-    this.export = function () {
-        // Copy the array. 
-        // Otherwise, the value returned by this function will change based on the UI.
-        return self.ids().slice(0);
-    };
-
-    this.exportIds = function () {
-        return self.export().map(function (item) { return item.id; });
-    };
-}
-
-function ManageDeprecationViewModel(id, versionDeprecationStateDictionary, defaultVersion, submitUrl, packageUrl, getAlternatePackageVersionsUrl, cveUrlTemplate, getCveIdsUrl, cweUrlTemplate, getCweIdsUrl) {
+function ManageDeprecationViewModel(id, versionDeprecationStateDictionary, defaultVersion, submitUrl, packageUrl, getAlternatePackageVersionsUrl) {
     var self = this;
 
     // Existing deprecation state information per version.
@@ -195,14 +11,14 @@ function ManageDeprecationViewModel(id, versionDeprecationStateDictionary, defau
             versionData.Text,
             version,
             version === defaultVersion,
-            versionData.IsVulnerable || versionData.IsLegacy || versionData.IsOther);
+            versionData.IsLegacy || versionData.HasCriticalBugs || versionData.IsOther);
     });
 
     this.dropdown = new MultiSelectDropdown(items, "version", "versions");
     this.chosenItemsConflictWarning = ko.pureComputed(function () {
         var chosenItems = self.dropdown.chosenItems();
-        var isVulnerable = self.isVulnerable();
         var isLegacy = self.isLegacy();
+        var hasCriticalBugs = self.hasCriticalBugs();
         var isOther = self.isOther();
         var warningMessage = null;
         var areMultipleVersionsSelected = chosenItems.length > 1;
@@ -223,13 +39,13 @@ function ManageDeprecationViewModel(id, versionDeprecationStateDictionary, defau
                 continue;
             }
 
-            if (versionData.IsVulnerable || versionData.IsLegacy || versionData.IsOther) {
+            if (versionData.IsLegacy || versionData.HasCriticalBugs || versionData.IsOther) {
                 hasVersionsWithExistingDeprecationState = true;
                 break;
             }
         }
 
-        if (isVulnerable || isLegacy || isOther) {
+        if (isLegacy || hasCriticalBugs || isOther) {
             if (areMultipleVersionsSelected && hasVersionsWithExistingDeprecationState) {
                 // Show a warning if multiple versions are selected and at least one has an existing deprecation
                 // The user should be aware they are replacing existing deprecations
@@ -247,145 +63,40 @@ function ManageDeprecationViewModel(id, versionDeprecationStateDictionary, defau
         return warningMessage;
     }, this);
 
-    this.isVulnerable = ko.observable(false);
     this.isLegacy = ko.observable(false);
+    this.hasCriticalBugs = ko.observable(false);
     this.isOther = ko.observable(false);
-
-    // Whether or not the checkbox for the CVSS section is checked.
-    this.hasCvss = ko.observable(false);
-
-    // The CVSS rating entered by the user.
-    this.selectedCvssRating = ko.observable(0);
-
-    // A string describing the severity of the CVSS rating entered by the user.
-    var invalidCvssRatingString = 'Invalid CVSS rating!';
-    this.getCvssRatingFloat = function () {
-        var rating = self.selectedCvssRating();
-        if (!rating) {
-            return null;
-        }
-
-        var ratingFloat = parseFloat(rating);
-        if (isNaN(ratingFloat) || ratingFloat < 0 || ratingFloat > 10) {
-            return;
-        }
-
-        return ratingFloat;
-    };
-
-    this.cvssRatingLabel = ko.pureComputed(function () {
-        var ratingFloat = self.getCvssRatingFloat();
-        if (ratingFloat === null) {
-            return '';
-        }
-
-        if (!ratingFloat) {
-            return invalidCvssRatingString;
-        }
-
-        if (ratingFloat < 4) {
-            return 'Low';
-        }
-
-        if (ratingFloat < 7) {
-            return 'Medium';
-        }
-
-        if (ratingFloat < 9) {
-            return 'High';
-        }
-
-        return 'Critical';
+    this.hasReason = ko.pureComputed(function () {
+        return self.isLegacy() || self.hasCriticalBugs() || self.isOther();
     }, this);
-    this.cvssRatingIsInvalid = ko.pureComputed(function () {
-        return self.cvssRatingLabel() === invalidCvssRatingString;
-    }, this);
-
-    // The CVSS rating to submit with the form.
-    this.cvssRating = ko.pureComputed(function () {
-        if (self.hasCvss()) {
-            return self.selectedCvssRating();
-        } else {
-            // If the CVSS section is unchecked, don't submit the CVSS rating with the form.
-            return null;
-        }
-    }, this);
-
-    this.updateCvssFromItem = function (item) {
-        if (!item || !item.cvss) {
-            return;
-        }
-
-        self.hasCvss(true);
-
-        var currentCvss = self.getCvssRatingFloat();
-        var newCvss = currentCvss
-            // If there is an existing CVSS, take the max of the current CVSS and the item's CVSS
-            ? Math.max(currentCvss, item.cvss)
-            // Otherwise, take the item's CVSS
-            : item.cvss;
-        self.selectedCvssRating(newCvss);
-    };
-
-    // The model for the CVEs view.
-    this.cves = new ManageDeprecationSecurityDetailListViewModel(
-        "cve",
-        "CVE ID(s)",
-        "Add one or more CVEs applicable to the vulnerability.",
-        "Add CVE by ID e.g. CVE-2014-999999, CVE-2015-888888",
-        "Add CVE",
-        /^CVE-\d{4}-\d{4,}$/g,
-        "CVE IDs have the form 'CVE-YYYY-NNNN', where 'YYYY' is a year (exactly 4 digits) and 'NNNN' is a number (with at least 4 digits).",
-        function (id) {
-            return window.nuget.formatString(cveUrlTemplate, id);
-        },
-        getCveIdsUrl,
-        function (result) {
-            return new ManageDeprecationSecurityDetailListItemViewModel(
-                result.CveId, true, null, result.Description, result.CvssRating);
-        },
-        this.updateCvssFromItem,
-        true,
-        null,
-        "We could not find this CVE. Is it correct?",
-        "NuGet.org refreshes its CVE data often and if we find this ID, your deprecation will be updated with the latest data.");
-
-    // The model for the CWEs view
-    this.cwes = new ManageDeprecationSecurityDetailListViewModel(
-        "cwe",
-        "CWE(s)",
-        "Add one or more CWEs applicable to the vulnerability.",
-        "Add CWE by ID or title",
-        "Add CWE",
-        /^CWE-\d+$/g,
-        "CWE IDs have the form 'CWE-N', where N is a number.",
-        function (id) {
-            return window.nuget.formatString(cweUrlTemplate, id.replace("CWE-", ""));
-        },
-        getCweIdsUrl,
-        function (result) {
-            return new ManageDeprecationSecurityDetailListItemViewModel(
-                result.CweId, true, result.Name, result.Description, result.CvssRating);
-        },
-        this.updateCvssFromItem,
-        false,
-        "We could not find a CWE with an ID of '{0}'. NuGet.org refreshes its CWE information often, but we might not have the latest data. Please enter a different CWE or wait and try again later.",
-        null,
-        null);
 
     // The ID entered into the alternate package ID textbox.
     this.chosenAlternatePackageId = ko.observable('');
 
     // The version chosen by the alternate package version dropdown.
     this.chosenAlternatePackageVersion = ko.observable();
+    this.isAlternateOfSelf = ko.pureComputed(function () {
+        var alternateId = self.alternatePackageId();
+        if (!alternateId) {
+            return false;
+        }
+
+        var alternateVersion = self.chosenAlternatePackageVersion();
+        if (!alternateVersion || alternateVersion === strings_SelectAlternateVersionOption) {
+            return false;
+        }
+
+        var chosenVersions = self.dropdown.chosenItems();
+        return alternateId === id && chosenVersions && chosenVersions.includes(alternateVersion);
+    }, this);
 
     // The cached list of versions associated with the currently entered alternate package ID.
     this.alternatePackageVersionsCached = ko.observableArray();
 
     // The list of options in the alternate package version dropdown.
     this.alternatePackageVersions = ko.pureComputed(function () {
-        // Include an "Any Version" option in case users want to select the package registration.
-        return [strings_AnyVersion].concat(self.alternatePackageVersionsCached());
+        // Include a "Latest" selection label in case users want to select the package registration.
+        return [strings_SelectAlternateVersionOption].concat(self.alternatePackageVersionsCached());
     }, this);
 
     // Whether or not the versions of the currently entered alternate package ID have been loaded.
@@ -395,13 +106,26 @@ function ManageDeprecationViewModel(id, versionDeprecationStateDictionary, defau
 
     // The error to show with the currently entered alternate package ID.
     // E.g. the package does not exist or cannot be chosen as an alternate.
-    this.chosenAlternatePackageIdError = ko.observable();
+    this.chosenAlternatePackageIdError = ko.pureComputed(function () {
+        var serverError = self.chosenAlternatePackageIdServerError();
+        if (serverError) {
+            return serverError;
+        }
+
+        if (self.isAlternateOfSelf()) {
+            return "A package cannot be the alternate package of itself. Please choose a different alternate package.";
+        }
+
+        return null;
+    }, this);
 
     // When a new alternate package ID is entered, load the list of versions from the server.
+    this.chosenAlternatePackageIdServerError = ko.observable();
     this.chosenAlternatePackageId.subscribe(function (id) {
         if (!id) {
             // If the user hasn't input an ID, don't query the server.
-            self.chosenAlternatePackageIdError(null);
+            self.alternatePackageVersionsCached.removeAll();
+            self.chosenAlternatePackageIdServerError(null);
             return;
         }
 
@@ -418,10 +142,10 @@ function ManageDeprecationViewModel(id, versionDeprecationStateDictionary, defau
                     if (self.alternatePackageId() === id) {
                         if (data.length) {
                             self.alternatePackageVersionsCached(data);
-                            self.chosenAlternatePackageIdError(null);
+                            self.chosenAlternatePackageIdServerError(null);
                         } else {
                             self.alternatePackageVersionsCached.removeAll();
-                            self.chosenAlternatePackageIdError("Could not find alternate package '" + id + "'.");
+                            self.chosenAlternatePackageIdServerError("Could not find alternate package '" + id + "'.");
                         }
                     }
                 }
@@ -430,7 +154,7 @@ function ManageDeprecationViewModel(id, versionDeprecationStateDictionary, defau
             error: function () {
                 if (self.alternatePackageId() === id) {
                     self.alternatePackageVersionsCached.removeAll();
-                    self.chosenAlternatePackageIdError("An unknown occurred when searching for alternate package '" + id + "'.");
+                    self.chosenAlternatePackageIdServerError("An unknown error occurred when searching for alternate package '" + id + "'.");
                 }
             }
         });
@@ -438,10 +162,10 @@ function ManageDeprecationViewModel(id, versionDeprecationStateDictionary, defau
 
     // The alternate package ID to submit with the form.
     this.alternatePackageId = ko.pureComputed(function () {
-        if (self.isLegacy()) {
+        if (self.hasReason()) {
             return self.chosenAlternatePackageId();
         } else {
-            // If the legacy checkbox is not selected, this section of the form is hidden.
+            // If a reason is not selected, this section of the form is hidden.
             // Don't submit the chosen alternate package ID with the form.
             return null;
         }
@@ -449,8 +173,8 @@ function ManageDeprecationViewModel(id, versionDeprecationStateDictionary, defau
     this.alternatePackageVersion = ko.pureComputed(function () {
         if (self.alternatePackageId()) {
             var version = self.chosenAlternatePackageVersion();
-            // If the chosen version is the "Any Version" string, don't submit it with the form.
-            if (version !== strings_AnyVersion) {
+            // If the chosen version string is the selection label, don't submit it with the form.
+            if (version !== strings_SelectAlternateVersionOption) {
                 return version;
             }
         }
@@ -461,6 +185,9 @@ function ManageDeprecationViewModel(id, versionDeprecationStateDictionary, defau
 
     // The custom message to submit with the form.
     this.customMessage = ko.observable('');
+    this.requiresCustomMessage = ko.pureComputed(function () {
+        return self.isOther() && !self.customMessage();
+    }, this);
 
     this.submitError = ko.observable();
     this.submit = function () {
@@ -478,12 +205,9 @@ function ManageDeprecationViewModel(id, versionDeprecationStateDictionary, defau
             data: window.nuget.addAjaxAntiForgeryToken({
                 id: id,
                 versions: self.dropdown.chosenItems(),
-                isVulnerable: self.isVulnerable(),
                 isLegacy: self.isLegacy(),
+                hasCriticalBugs: self.hasCriticalBugs(),
                 isOther: self.isOther(),
-                cveIds: self.cves.exportIds(),
-                cvssRating: self.cvssRating(),
-                cweIds: self.cwes.exportIds(),
                 alternatePackageId: self.alternatePackageId(),
                 alternatePackageVersion: self.alternatePackageVersion(),
                 customMessage: self.customMessage()
@@ -498,6 +222,10 @@ function ManageDeprecationViewModel(id, versionDeprecationStateDictionary, defau
         });
     };
 
+    this.submitDisabled = ko.pureComputed(function () {
+        return self.requiresCustomMessage() || self.isAlternateOfSelf();
+    }, this);
+
     // Clone the version deprecation state dictionary so that we can remember form state when the selected versions change.
     // The default state for a selected version is its current deprecation state.
     // Converting the existing dictionary to JSON and then parsing it is a very cheap way to do a deep copy.
@@ -509,12 +237,9 @@ function ManageDeprecationViewModel(id, versionDeprecationStateDictionary, defau
             return;
         }
 
-        versionData.IsVulnerable = self.isVulnerable();
         versionData.IsLegacy = self.isLegacy();
+        versionData.HasCriticalBugs = self.hasCriticalBugs();
         versionData.IsOther = self.isOther();
-        versionData.CveIds = self.cves.export();
-        versionData.CvssRating = self.cvssRating();
-        versionData.CweIds = self.cwes.export();
         versionData.AlternatePackageId = self.alternatePackageId();
         versionData.AlternatePackageVersion = self.alternatePackageVersion();
         versionData.CustomMessage = self.customMessage();
@@ -526,16 +251,9 @@ function ManageDeprecationViewModel(id, versionDeprecationStateDictionary, defau
             return;
         }
 
-        self.isVulnerable(versionData.IsVulnerable);
         self.isLegacy(versionData.IsLegacy);
+        self.hasCriticalBugs(versionData.HasCriticalBugs);
         self.isOther(versionData.IsOther);
-
-        self.cves.import(versionData.CveIds);
-
-        self.hasCvss(versionData.CvssRating);
-        self.selectedCvssRating(versionData.CvssRating);
-
-        self.cwes.import(versionData.CweIds);
 
         self.chosenAlternatePackageId(versionData.AlternatePackageId);
         if (versionData.AlternatePackageVersion) {

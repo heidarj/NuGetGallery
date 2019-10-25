@@ -7,9 +7,10 @@ using NuGet.Services.Entities;
 
 namespace NuGetGallery
 {
-    public interface IEntitiesContext
+    public interface IEntitiesContext : IReadOnlyEntitiesContext
     {
         DbSet<Certificate> Certificates { get; set; }
+        DbSet<PackageDeprecation> Deprecations { get; set; }
         DbSet<PackageRegistration> PackageRegistrations { get; set; }
         DbSet<Credential> Credentials { get; set; }
         DbSet<Scope> Scopes { get; set; }
@@ -18,13 +19,9 @@ namespace NuGetGallery
         DbSet<ReservedNamespace> ReservedNamespaces { get; set; }
         DbSet<UserCertificate> UserCertificates { get; set; }
         DbSet<SymbolPackage> SymbolPackages { get; set; }
-        DbSet<Cve> Cves { get; set; }
-        DbSet<Cwe> Cwes { get; set; }
 
         Task<int> SaveChangesAsync();
-        DbSet<T> Set<T>() where T : class;
         void DeleteOnCommit<T>(T entity) where T : class;
-        void SetCommandTimeout(int? seconds);
         IDatabase GetDatabase();
     }
 }

@@ -4,6 +4,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using Moq;
 using NuGet.Services.Entities;
 using NuGet.Versioning;
 using NuGetGallery.Configuration;
@@ -402,17 +403,66 @@ namespace NuGetGallery.Controllers
             Assert.Equal(expected.Count(), searchCount);
         }
 
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public void TestReadOnlyFeatureFlag(bool readOnly)
+        {
+            var packagesRepositoryMock = new Mock<IReadOnlyEntityRepository<Package>>();          
+            var readWritePackagesRepositoryMock = new Mock<IEntityRepository<Package>>();
+            var configurationService = Mock.Of<IGalleryConfigurationService>();
+            var searchService = Mock.Of<ISearchService>();
+            var telemetryService = Mock.Of<ITelemetryService>();
+            var featureFlagServiceMock = new Mock<IFeatureFlagService>();
+            featureFlagServiceMock.Setup(ffs => ffs.IsODataDatabaseReadOnlyEnabled()).Returns(readOnly);
+
+            var searchServiceFactoryMock = new Mock<IHijackSearchServiceFactory>();
+            searchServiceFactoryMock
+                .Setup(f => f.GetService())
+                .Returns(searchService);
+
+            var testController = new ODataV2FeedController(
+                packagesRepositoryMock.Object,
+                readWritePackagesRepositoryMock.Object,
+                configurationService,
+                searchServiceFactoryMock.Object,
+                telemetryService,
+                featureFlagServiceMock.Object);
+
+            var pacakges = testController.GetAll();
+
+            if(readOnly)
+            {
+                packagesRepositoryMock.Verify(r => r.GetAll(), times: Times.Exactly(1));
+                readWritePackagesRepositoryMock.Verify(r => r.GetAll(), times: Times.Never);
+            }
+            else
+            {
+                packagesRepositoryMock.Verify(r => r.GetAll(), times: Times.Never);
+                readWritePackagesRepositoryMock.Verify(r => r.GetAll(), times: Times.Exactly(1));
+            }
+        }
+
         protected override ODataV2FeedController CreateController(
-            IEntityRepository<Package> packagesRepository,
+            IReadOnlyEntityRepository<Package> packagesRepository,
+            IEntityRepository<Package> readWritePackagesRepository,
             IGalleryConfigurationService configurationService,
             ISearchService searchService,
-            ITelemetryService telemetryService)
+            ITelemetryService telemetryService,
+            IFeatureFlagService featureFlagService)
         {
+            var searchServiceFactory = new Mock<IHijackSearchServiceFactory>();
+            searchServiceFactory
+                .Setup(f => f.GetService())
+                .Returns(searchService);
+
             return new ODataV2FeedController(
                 packagesRepository,
+                readWritePackagesRepository,
                 configurationService,
-                searchService,
-                telemetryService);
+                searchServiceFactory.Object,
+                telemetryService,
+                featureFlagService);
         }
 
         private void AssertSemVer2PackagesFilteredFromResult(IEnumerable<V2FeedPackage> resultSet)

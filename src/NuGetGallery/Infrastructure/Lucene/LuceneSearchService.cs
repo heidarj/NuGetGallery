@@ -13,7 +13,7 @@ using Lucene.Net.Index;
 using Lucene.Net.Search;
 using Lucene.Net.Search.Function;
 using NuGet.Services.Entities;
-using NuGet.Services.Search.Models;
+using NuGetGallery.Infrastructure.Search.Models;
 using NuGetGallery.Helpers;
 
 namespace NuGetGallery
@@ -352,7 +352,7 @@ namespace NuGetGallery
 
             if (fieldName == "Id")
             {
-                searchTerm.TermOrPhrase = PackageIndexEntity.SplitId(searchTerm.TermOrPhrase);
+                searchTerm.TermOrPhrase = LuceneDocumentFactory.SplitId(searchTerm.TermOrPhrase);
             }
 
             return searchTerm;

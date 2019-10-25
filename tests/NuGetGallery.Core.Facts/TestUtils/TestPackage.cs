@@ -35,13 +35,15 @@ namespace NuGetGallery
             Uri projectUrl = null,
             Uri iconUrl = null,
             bool requireLicenseAcceptance = false,
+            bool? developmentDependency = null,
             IEnumerable<PackageDependencyGroup> packageDependencyGroups = null,
             IEnumerable<ClientPackageType> packageTypes = null,
             bool isSymbolPackage = false,
             RepositoryMetadata repositoryMetadata = null,
             Func<string> getCustomNodes = null,
             string licenseExpression = null,
-            string licenseFilename = null)
+            string licenseFilename = null,
+            string iconFilename = null)
         {
             var fullNuspec = (@"<?xml version=""1.0""?>
                 <package xmlns=""http://schemas.microsoft.com/packaging/2011/08/nuspec.xsd"">
@@ -53,13 +55,15 @@ namespace NuGetGallery
                         <description>" + description + @"</description>
                         <tags>" + tags + @"</tags>
                         <requireLicenseAcceptance>" + requireLicenseAcceptance + @"</requireLicenseAcceptance>
-                        <authors>" + authors + @"</authors>
+                        " + (developmentDependency.HasValue ? ("<developmentDependency>" + developmentDependency.Value + "</developmentDependency>") : string.Empty) +
+                        "<authors>" + authors + @"</authors>
                         <owners>" + owners + @"</owners>
                         <language>" + (language ?? string.Empty) + @"</language>
                         <copyright>" + (copyright ?? string.Empty) + @"</copyright>
                         <releaseNotes>" + (releaseNotes ?? string.Empty) + @"</releaseNotes>
                         <licenseUrl>" + (licenseUrl?.AbsoluteUri ?? string.Empty) + @"</licenseUrl>
                         " + WriteLicense(licenseExpression, licenseFilename) + @"
+                        " + WriteIcon(iconFilename) + @"
                         <projectUrl>" + (projectUrl?.ToString() ?? string.Empty) + @"</projectUrl>
                         <iconUrl>" + (iconUrl?.ToString() ?? string.Empty) + @"</iconUrl>
                         <packageTypes>" + WritePackageTypes(packageTypes) + @"</packageTypes>
@@ -102,13 +106,23 @@ namespace NuGetGallery
             return stringBuilder.ToString();
         }
 
+        private static string WriteIcon(string iconFilename)
+        {
+            if (iconFilename != null)
+            {
+                return $"<icon>{iconFilename}</icon>";
+            }
+
+            return string.Empty;
+        }
+
         private static string WriteRepositoryMetadata(RepositoryMetadata repositoryMetadata)
         {
             return repositoryMetadata == null
                 ? string.Empty
-                : "<repository type=\"" + repositoryMetadata.Type + "\" " + 
-                                "url =\"" + repositoryMetadata.Url + "\" " + 
-                                "commit=\"" + repositoryMetadata.Commit + "\" " + 
+                : "<repository type=\"" + repositoryMetadata.Type + "\" " +
+                                "url =\"" + repositoryMetadata.Url + "\" " +
+                                "commit=\"" + repositoryMetadata.Commit + "\" " +
                                 "branch=\"" + repositoryMetadata.Branch + "\"/>";
         }
 
@@ -120,7 +134,7 @@ namespace NuGetGallery
             }
 
             var output = new StringBuilder();
-            foreach(var packageType in packageTypes)
+            foreach (var packageType in packageTypes)
             {
                 output.Append("<packageType");
                 if (packageType.Name != null)
@@ -189,6 +203,7 @@ namespace NuGetGallery
             Uri projectUrl = null,
             Uri iconUrl = null,
             bool requireLicenseAcceptance = false,
+            bool? developmentDependency = null,
             IEnumerable<PackageDependencyGroup> packageDependencyGroups = null,
             IEnumerable<ClientPackageType> packageTypes = null,
             RepositoryMetadata repositoryMetadata = null,
@@ -198,7 +213,9 @@ namespace NuGetGallery
             Func<string> getCustomNuspecNodes = null,
             string licenseExpression = null,
             string licenseFilename = null,
-            byte[] licenseFileContents = null)
+            byte[] licenseFileContents = null,
+            string iconFilename = null,
+            byte[] iconFileContents = null)
         {
             return CreateTestPackageStream(packageArchive =>
             {
@@ -207,20 +224,12 @@ namespace NuGetGallery
                 {
                     WriteNuspec(stream, true, id, version, title, summary, authors, owners, description, tags, language,
                         copyright, releaseNotes, minClientVersion, licenseUrl, projectUrl, iconUrl,
-                        requireLicenseAcceptance, packageDependencyGroups, packageTypes, isSymbolPackage, repositoryMetadata,
-                        getCustomNuspecNodes, licenseExpression, licenseFilename);
+                        requireLicenseAcceptance, developmentDependency, packageDependencyGroups, packageTypes, isSymbolPackage, repositoryMetadata,
+                        getCustomNuspecNodes, licenseExpression, licenseFilename, iconFilename);
                 }
 
-                if (licenseFileContents != null && licenseFilename != null)
-                {
-                    // enforce directory separators the same way as the client (see PackageArchiveReader.GetStream)
-                    licenseFilename = PathUtility.StripLeadingDirectorySeparators(licenseFilename);
-                    var licenseEntry = packageArchive.CreateEntry(licenseFilename, CompressionLevel.Fastest);
-                    using (var licenseStream = licenseEntry.Open())
-                    {
-                        licenseStream.Write(licenseFileContents, 0, licenseFileContents.Length);
-                    }
-                }
+                licenseFilename = AddBinaryFile(packageArchive, licenseFilename, licenseFileContents);
+                iconFilename = AddBinaryFile(packageArchive, iconFilename, iconFileContents);
 
                 if (populatePackage != null)
                 {
@@ -229,14 +238,30 @@ namespace NuGetGallery
             }, desiredTotalEntryCount);
         }
 
+        private static string AddBinaryFile(ZipArchive archive, string filename, byte[] fileContents)
+        {
+            if (fileContents != null && filename != null)
+            {
+                // enforce directory separators the same way as the client (see PackageArchiveReader.GetStream)
+                filename = PathUtility.StripLeadingDirectorySeparators(filename);
+                var fileEntry = archive.CreateEntry(filename, CompressionLevel.Fastest);
+                using (var fileStream = fileEntry.Open())
+                {
+                    fileStream.Write(fileContents, 0, fileContents.Length);
+                }
+            }
+
+            return filename;
+        }
+
         public static MemoryStream CreateTestSymbolPackageStream(string id = "theId", string version = "1.0.42", Action<ZipArchive> populatePackage = null)
         {
             var packageTypes = new List<ClientPackageType>();
             packageTypes.Add(new ClientPackageType(name: "SymbolsPackage", version: ClientPackageType.EmptyVersion));
-            return CreateTestPackageStream(id, 
-                version, 
-                packageTypes: packageTypes, 
-                populatePackage: populatePackage, 
+            return CreateTestPackageStream(id,
+                version,
+                packageTypes: packageTypes,
+                populatePackage: populatePackage,
                 isSymbolPackage: true);
         }
 

@@ -1,7 +1,6 @@
 ﻿// Copyright (c) .NET Foundation. All rights reserved.
 // Licensed under the Apache License, Version 2.0. See License.txt in the project root for license information.
 using System;
-using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using Lucene.Net.Analysis;
@@ -38,7 +37,7 @@ namespace NuGetGallery
             {
                 // Split the title based on IdSeparators, then run it through the innerAnalyzer
                 string title = reader.ReadToEnd();
-                string partiallyTokenized = String.Join(" ", title.Split(PackageIndexEntity.IdSeparators, StringSplitOptions.RemoveEmptyEntries));
+                string partiallyTokenized = String.Join(" ", title.Split(LuceneDocumentFactory.IdSeparators, StringSplitOptions.RemoveEmptyEntries));
                 TokenStream result = whitespaceAnalyzer.TokenStream(fieldName, new StringReader(partiallyTokenized));
                 result = new LowerCaseFilter(result);
                 return result;

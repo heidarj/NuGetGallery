@@ -35,6 +35,7 @@
 
         // Source: https://stackoverflow.com/questions/18754020/bootstrap-3-with-jquery-validation-plugin
         // Set the JQuery validation plugin's defaults to use classes recognized by Bootstrap.
+        var validatorErrorClass = 'help-block';
         $.validator.setDefaults({
             highlight: function (element) {
                 $(element).closest('.form-group').addClass('has-error');
@@ -43,7 +44,7 @@
                 $(element).closest('.form-group').removeClass('has-error');
             },
             errorElement: 'span',
-            errorClass: 'help-block',
+            errorClass: validatorErrorClass,
             errorPlacement: function (error, element) {
                 if (element.parent('.input-group').length) {
                     error.insertAfter(element.parent());
@@ -54,35 +55,60 @@
             showErrors: function (errorMap, errorList) {
                 this.defaultShowErrors();
 
-                // By default, showErrors adds an aria-describedby attribute to every field that it validates, even if it finds no issues.
-                // This is a problem, because the aria-describedby attribute will then link to an empty element.
-                // This code removes the aria-describedby if the describing element is missing or empty.
                 var i;
                 for (i = 0; this.errorList[i]; i++) {
-                    removeInvalidAriaDescribedBy(this.errorList[i].element);
+                    fixAccessibilityIssuesWithAriaDescribedBy(this.errorList[i].element, validatorErrorClass);
                 }
 
                 for (i = 0; this.successList[i]; i++) {
-                    removeInvalidAriaDescribedBy(this.successList[i]);
+                    fixAccessibilityIssuesWithAriaDescribedBy(this.successList[i], validatorErrorClass);
                 }
             }
         });
     }
 
-    function removeInvalidAriaDescribedBy(element) {
+    function fixAccessibilityIssuesWithAriaDescribedBy(element, validatorErrorClass) {
         var describedBy = element.getAttribute("aria-describedby");
         if (!describedBy) {
             return;
         }
 
-        var ids = describedBy.split(" ")
+        var uniqueIds = [];
+        var ids = describedBy
+            .split(" ")
             .filter(function (describedById) {
                 if (!describedById) {
                     return false;
                 }
 
+                // The default showErrors adds an aria-describedby attribute to every field that it validates, even if it finds no issues.
+                // This is a problem, because the aria-describedby attribute will then link to an empty element.
+                // If the element linked to by the aria-describedby attribute is empty, remove the aria-describedby.
                 var describedByElement = $("#" + describedById);
                 return describedByElement && describedByElement.text();
+            })
+            .map(function (describedById) {
+                // The default showErrors puts the error inside a container.
+                // This causes Narrator to read the error as being part of a group, even though it is the only error.
+                // JQuery Validator only ever shows a single error for each form input so it is always possible for us to simply unwrap the error.
+                var describedByElement = $("#" + describedById);
+                var parent = describedByElement.parent();
+                if (parent.hasClass(validatorErrorClass)) {
+                    parent.text(describedByElement.text());
+                    describedByElement.remove();
+                    return parent.attr('id');
+                } else {
+                    return describedById;
+                }
+            })
+            .filter(function (describedById) {
+                // Remove any duplicate IDs.
+                var isUnique = $.inArray(describedById, uniqueIds) === -1;
+                if (isUnique) {
+                    uniqueIds.push(describedById);
+                }
+
+                return isUnique;
             });
 
         if (ids.length) {
@@ -177,7 +203,8 @@
 
     nuget.configureExpander = function (prefix, lessIcon, lessMessage, moreIcon, moreMessage) {
         var hidden = $('#' + prefix);
-        var show = $('#show-' + prefix);
+        var showId = '#show-' + prefix;
+        var show = $(showId);
         var showIcon = $('#show-' + prefix + ' i');
         var showText = $('#show-' + prefix + ' span');
         hidden.on('hide.bs.collapse', function (e) {
@@ -199,6 +226,11 @@
         show.on('click', function (e) {
             e.preventDefault();
         });
+
+        // If the URI fragment (hash) matches the expander ID, automatically expand the section.
+        if (document.location.hash === showId) {
+            hidden.collapse('show');
+        }
     };
 
     nuget.configureExpanderHeading = function (prefix) {
@@ -304,6 +336,10 @@
         return typeof ga === 'function';
     };
 
+    nuget.isAiAvailable = function () {
+        return typeof window.appInsights === 'object';
+    };
+
     nuget.getDateFormats = function (input) {
         var datetime = moment.utc(input);
 
@@ -402,9 +438,21 @@
         });
     };
 
+    nuget.sendAnalyticsEvent = function (category, action, label, eventValue, options) {
+        if (window.nuget.isGaAvailable()) {
+            ga('send', 'event', category, action, label, eventValue, options);
+        }
+    };
+
+    nuget.sendAiMetric = function (name, value, properties) {
+        if (window.nuget.isAiAvailable()) {
+            window.appInsights.trackMetric(name, value, 1, value, value, properties);
+        }
+    };
+
     window.nuget = nuget;
 
-    jQuery.extend(jQuery.expr[':'], {
+    jQuery.extend(jQuery.expr.pseudos, {
         focusable: window.nuget.canElementBeFocused,
         tabbable: window.nuget.canElementBeTabbedTo
     });
@@ -412,6 +460,12 @@
     initializeJQueryValidator();
 
     $(function () {
+        // Enable the POST links. These are links that perform a POST via a form instead of traditional navigation.
+        $(".post-link").on('click', function () {
+            $("#" + $(this).data().formId).submit();
+            return false;
+        });
+
         // Use moment.js to format attributes with the "datetime" attribute to "X time ago".
         $.each($('*[data-datetime]'), function () {
             var $el = $(this);
@@ -430,7 +484,7 @@
         });
 
         // Handle confirm pop-ups.
-        $('*[data-confirm]').delegate('', 'click', function (e) {
+        $('*[data-confirm]').on('click', '', function (e) {
             window.nuget.confirmEvent($(this).data().confirm, e);
         });
 
@@ -438,26 +492,41 @@
         $('.has-error')
             .find('input,textarea,select')
             .filter(':visible:first')
-            .focus();
+            .trigger('focus');
 
         // Handle Google analytics tracking event on specific links.
-        $.each($('a[data-track]'), function () {
-            $(this).click(function (e) {
-                var href = $(this).attr('href');
-                var category = $(this).data().track;
-                if (window.nuget.isGaAvailable() && href && category) {
-                    if (e.altKey || e.ctrlKey || e.metaKey) {
-                        ga('send', 'event', category, 'click', href);
-                    } else {
-                        e.preventDefault();
-                        ga('send', 'event', category, 'click', href, {
-                            'transport': 'beacon',
-                            'hitCallback': window.nuget.createFunctionWithTimeout(function () {
-                                document.location = href;
-                            })
-                        });
-                    }
+        var emitClickEvent = function (e, emitDirectly) {
+            if (!window.nuget.isGaAvailable()) {
+                return;
+            }
+
+            var href = $(this).attr('href');
+            var category = $(this).data().track;
+            var trackValue = $(this).data().trackValue;
+            if (href && category) {
+                if (emitDirectly) {
+                    window.nuget.sendAnalyticsEvent(category, 'click', href, trackValue);
+                } else {
+                    // This path is used when the click will result in a page transition. Because of this we need to
+                    // emit telemetry in a special way so that the event gets out before the page transition occurs.
+                    e.preventDefault();
+                    window.nuget.sendAnalyticsEvent(category, 'click', href, trackValue, {
+                        'transport': 'beacon',
+                        'hitCallback': window.nuget.createFunctionWithTimeout(function () {
+                            document.location = href;
+                        })
+                    });
                 }
+            }
+        };
+        $.each($('a[data-track]'), function () {
+            $(this).on('mouseup', function (e) {
+                if (e.which === 2) { // Middle-mouse click
+                    emitClickEvent.call(this, e, true);
+                }
+            });
+            $(this).on('click', function (e) {
+                emitClickEvent.call(this, e, e.altKey || e.ctrlKey || e.metaKey);
             });
         });
 

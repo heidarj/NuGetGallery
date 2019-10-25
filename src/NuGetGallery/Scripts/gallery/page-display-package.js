@@ -41,8 +41,9 @@ $(function () {
         var showLess = $("#readme-less");
         $clamp(showLess[0], { clamp: 10, useNativeClamp: false });
 
-        $("#show-readme-more").click(function () {
+        $("#show-readme-more").click(function (e) {
             showLess.collapse("toggle");
+            e.preventDefault();
         });
         showLess.on('hide.bs.collapse', function (e) {
             e.stopPropagation();
@@ -54,6 +55,7 @@ $(function () {
 
     // Configure expanders
     window.nuget.configureExpanderHeading("dependency-groups");
+    window.nuget.configureExpanderHeading("github-usage");
     window.nuget.configureExpanderHeading("version-history");
     window.nuget.configureExpander(
         "hidden-versions",
@@ -88,10 +90,64 @@ $(function () {
         $(this).closest('form').submit();
     })
 
-    // Emit a Google Analytics event when the user expands or collapses the Dependencies section.
+    var storage = window['localStorage'];
+    if (storage) {
+        var key = 'preferred_tab';
+
+        // Restore preferred tab selection from localStorage.
+        var preferredTab = storage.getItem(key);
+        if (preferredTab) {
+            $('#' + preferredTab).tab('show');
+        }
+
+        // Make sure we save the user's preferred tab to localStorage.
+        $('.package-manager-tab').on('shown.bs.tab', function (e) {
+            storage.setItem(key, e.target.id);
+        });
+    }
+
     if (window.nuget.isGaAvailable()) {
+        // Emit a Google Analytics event when the user expands or collapses the Dependencies section.
         $("#dependency-groups").on('hide.bs.collapse show.bs.collapse', function (e) {
             ga('send', 'event', 'dependencies', e.type);
         });
+
+        // Emit a Google Analytics event when the user expands or collapses the GitHub Usage section.
+        $("#github-usage").on('hide.bs.collapse show.bs.collapse', function (e) {
+            ga('send', 'event', 'github-usage', e.type);
+        });
+
+        // Emit a Google Analytics event when the user clicks on a repo link in the GitHub Usage section.
+        $(".gh-link").on('click', function (elem) {
+            if (!elem.delegateTarget.dataset.indexNumber) {
+                console.error("indexNumber property doesn't exist!");
+            } else {
+                let linkIndex = elem.delegateTarget.dataset.indexNumber;
+                ga('send', 'event', 'github-usage', 'link-click-' + linkIndex);
+            }
+        });
     }
+
+    // Add smooth scrolling to dependent-repos-link
+    $("#dependent-repos-link").on('click', function (event) {
+        // Emit a Google Analytics event
+        if (window.nuget.isGaAvailable()) {
+            ga('send', 'event', 'github-usage', 'sidebar-link-click');
+        }
+
+        if (this.hash !== "") {
+            event.preventDefault();
+            let hash = this.hash;
+            let hashElem = $(hash);
+            if (hashElem.attr("aria-expanded") == "false") {
+                hashElem.click();
+            }
+            $('html, body').animate({
+                scrollTop: hashElem.offset().top
+            }, 400, function () {
+                // Add hash (#) to URL when done scrolling (default click behavior)
+                window.location.hash = hash;
+            });
+        }
+    });
 });

@@ -20,13 +20,13 @@ namespace NuGetGallery.FunctionalTests.License
         }
 
         [Fact]
-        [Description("Push an invalidp package with license expression and verify uploading is blocked")]
+        [Description("Push an invalid package with license expression and verify uploading is blocked")]
         [Priority(1)]
         [Category("P1Tests")]
         public async Task UploadInValidPackageWithLicenseExpression()
         {
             // Arrange
-            var packageName = $"TestPackageWithLicense.{DateTime.UtcNow.Ticks}";
+            var packageName = $"TestPackageWithLicense.{Guid.NewGuid():N}";
             var packageVersion = "1.0.0";
             
             var licenseUrl = "https://testNugetLicenseUrl";
@@ -51,7 +51,7 @@ namespace NuGetGallery.FunctionalTests.License
         [InlineData("https://aka.ms/deprecateLicenseUrl", "licensefolder\\license.txt", "license.txt", "It's a license", "does not exist in the package")]
         public async Task UploadInValidPackageWithLicenseFile(string licenseUrl, string licenseFile, string licenseFileName, string licenseFileContents, string expectedErrorMessage)
         {
-            var packageName = $"TestPackageWithLicense.{DateTime.UtcNow.Ticks}";
+            var packageName = $"TestPackageWithLicense.{Guid.NewGuid():N}";
             string packageVersion = "1.0.0";
             string packageFullPath = await _packageCreationHelper.CreatePackageWithLicenseFile(packageName, packageVersion, licenseUrl, licenseFile, licenseFileName, licenseFileContents);
 

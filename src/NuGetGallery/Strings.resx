@@ -1006,7 +1006,7 @@ The {1} Team</value>
     <value>Unknown error!</value>
   </data>
   <data name="UploadPackage_DeprecatingLicenseUrl" xml:space="preserve">
-    <value>&lt;licenseUrl&gt; element will be deprecated, please consider switching to specifying the license in the package.</value>
+    <value>The &lt;licenseUrl&gt; element is deprecated. Consider using the &lt;license&gt; element instead.</value>
   </data>
   <data name="UploadPackage_DeprecationUrlUsage" xml:space="preserve">
     <value>The license deprecation URL must be used in conjunction with specifying the license in the package.</value>
@@ -1022,22 +1022,23 @@ The {1} Team</value>
     <value>The package has no license information specified.</value>
   </data>
   <data name="UploadPackage_InvalidLicenseFileExtension" xml:space="preserve">
-    <value>The license file has invalid extension '{0}'. Extension must be either empty or one of the following: {1}.</value>
+    <value>The license file has an invalid extension '{0}'. Extension must be either empty or one of the following: {1}.</value>
     <comment>{0} is the specified extension. {1} is the string containing the allowed non-empty extensions list</comment>
   </data>
-  <data name="UploadPackage_LicenseFileDoesNotExist" xml:space="preserve">
-    <value>The license file '{0}' does not exist in the package.</value>
-    <comment>{0} is the license file name specified in the .nuspec</comment>
+  <data name="UploadPackage_FileDoesNotExist" xml:space="preserve">
+    <value>The {0} file '{1}' does not exist in the package.</value>
+    <comment>{0} is the type of file ('license', 'icon', etc.), {1} is the file name specified in the .nuspec</comment>
   </data>
   <data name="UploadPackage_LicenseMustBePlainText" xml:space="preserve">
     <value>The license file must be plain text using UTF-8 encoding.</value>
   </data>
-  <data name="UploadPackage_LicenseFileTooLong" xml:space="preserve">
-    <value>The license file cannot be longer than {0}.</value>
-    <comment>{0} is the string representation max allowed license file size (in whatever units the caller choses)</comment>
+  <data name="UploadPackage_FileTooLong" xml:space="preserve">
+    <value>The {0} file cannot be larger than {1}.</value>
+    <comment>{0} is the file type ('license', 'icon', etc.), {1} is the string representation max allowed license file size (in whatever units the caller chooses)</comment>
   </data>
-  <data name="UploadPackage_LicenseNodeContainsChildren" xml:space="preserve">
-    <value>The license node cannot contain child nodes.</value>
+  <data name="UploadPackage_NodeContainsChildren" xml:space="preserve">
+    <value>The {0} node cannot contain child nodes.</value>
+    <comment>{0} is the node name</comment>
   </data>
   <data name="UploadPackage_LicenseNodeValueTooLong" xml:space="preserve">
     <value>The license node value must be shorter than 500 characters.</value>
@@ -1052,9 +1053,6 @@ The {1} Team</value>
   <data name="UploadPackage_UnsupportedLicenseType" xml:space="preserve">
     <value>Unsupported license type '{0}'.</value>
     <comment>{0} is the license type read from the nuspec</comment>
-  </data>
-  <data name="UploadPackage_LicenseFilesAreNotAllowed" xml:space="preserve">
-    <value>License files are not yet supported.</value>
   </data>
   <data name="UploadPackage_DeprecationUrlRequiredForLicenseExpressions" xml:space="preserve">
     <value>To provide a better experience for older clients when a license expression is specified, &lt;licenseUrl&gt; must be set to '{0}'.</value>
@@ -1091,12 +1089,6 @@ The {1} Team</value>
   <data name="SearchServiceIsNotAvailable" xml:space="preserve">
     <value>Search Service is not available. Please try again later.</value>
   </data>
-  <data name="AutocompleteCveIds_ValidationError" xml:space="preserve">
-    <value>Invalid CVE ID format. The CVE ID should be formatted as \"CVE-{year}-xxxxxxx\" or just \"{year}-xxxxxxx\" with a minimum of 4 digits.</value>
-  </data>
-  <data name="AutocompleteCweIds_ValidationError" xml:space="preserve">
-    <value>Invalid CWE ID format. The CWE ID should be formatted as \"CWE-xxx\" with a minimum of 2 digits, or have a minimum length of 4 characters for a textual query.</value>
-  </data>
   <data name="DeprecatePackage_MissingVersion" xml:space="preserve">
     <value>At least one version of package '{0}' specified could not be found.</value>
   </data>
@@ -1109,12 +1101,6 @@ The {1} Team</value>
   <data name="DeprecatePackage_NoVersions" xml:space="preserve">
     <value>You must select at least one version to deprecate!</value>
   </data>
-  <data name="DeprecatePackage_InvalidCve" xml:space="preserve">
-    <value>The CVE ID '{0}' is invalid. CVE IDs have the form 'CVE-YYYY-NNNN', where 'YYYY' is a year (exactly 4 digits) and 'NNNN' is a number (with at least 4 digits).</value>
-  </data>
-  <data name="DeprecatePackage_InvalidCwe" xml:space="preserve">
-    <value>The CWE ID '{0}' is invalid. CWE IDs have the form 'CWE-N', where N is a number.</value>
-  </data>
   <data name="DeprecatePackage_Forbidden" xml:space="preserve">
     <value>You do not have permission to deprecate this package.</value>
   </data>
@@ -1124,21 +1110,47 @@ The {1} Team</value>
   <data name="DeprecatePackage_MissingRegistration" xml:space="preserve">
     <value>Package '{0}' could not be found.</value>
   </data>
-  <data name="DeprecatePackage_InvalidCvss" xml:space="preserve">
-    <value>The CVSS rating specified is invalid.</value>
-  </data>
-  <data name="DeprecatePackage_CweMissing" xml:space="preserve">
-    <value>At least one CWE provided was not found!</value>
-  </data>
-  <data name="DeprecatePackage_CveUrlFormat" xml:space="preserve">
-    <value>https://cve.mitre.org/cgi-bin/cvename.cgi?name={0}</value>
-    <comment>{0} is the CVE's ID (e.g. CVE-2019-0001)</comment>
-  </data>
-  <data name="DeprecatePackage_CweUrlFormat" xml:space="preserve">
-    <value>https://cwe.mitre.org/data/definitions/{0}.html</value>
-    <comment>{0} is the CWE's ID number (e.g. CWE-999 has an ID number of 999)</comment>
+  <data name="DeprecatePackage_CustomMessageRequired" xml:space="preserve">
+    <value>You must add a custom message if you are deprecating a package due to another reason!</value>
   </data>
   <data name="SymbolsPackage_NoSymbols" xml:space="preserve">
     <value>The package does not contain any symbol (.pdb) files.</value>
+  </data>
+  <data name="UploadPackage_EmbeddedIconNotAccepted" xml:space="preserve">
+    <value>The &lt;icon&gt; element is not currently supported.</value>
+  </data>
+  <data name="DeprecatePackage_CustomMessageTooLong" xml:space="preserve">
+    <value>Your custom message is too long. It must be under {0} characters.</value>
+  </data>
+  <data name="DeprecatePackage_AlternateOfSelf" xml:space="preserve">
+    <value>A package cannot be the alternate package of itself.</value>
+  </data>
+  <data name="PackagesWithIdNotFound" xml:space="preserve">
+    <value>There are no packages with ID '{0}'.</value>
+  </data>
+  <data name="UploadPackage_InvalidIconFileExtension" xml:space="preserve">
+    <value>The icon file has an invalid extension '{0}'. Extension must be one of the following: {1}.</value>
+    <comment>{0} is the icon file extension specified in the .nuspec, {1} is the list of allowed extensions</comment>
+  </data>
+  <data name="UploadPackage_IconFileType" xml:space="preserve">
+    <value>icon</value>
+  </data>
+  <data name="UploadPackage_LicenseFileType" xml:space="preserve">
+    <value>license</value>
+  </data>
+  <data name="UploadPackage_UnsupportedIconImageFormat" xml:space="preserve">
+    <value>Unsupported icon image format. Only PNG and JPG images are supported.</value>
+  </data>
+  <data name="LoggedInUserDeleted" xml:space="preserve">
+    <value>You have been logged out as your NuGet account was deleted. Please contact support if this is unexpected.</value>
+  </data>
+  <data name="AccountDelete_SelfServiceSuccess" xml:space="preserve">
+    <value>Your account is being deleted. You have been logged out.</value>
+  </data>
+  <data name="SiteAdminNotLoggedInWithRequiredTenant" xml:space="preserve">
+    <value>The site admins are required to sign in with the '{0}' tenant only.</value>
+  </data>
+  <data name="UploadPackage_IconUrlDeprecated" xml:space="preserve">
+    <value>The &lt;iconUrl&gt; element is deprecated. Consider using the &lt;icon&gt; element instead.</value>
   </data>
 </root>

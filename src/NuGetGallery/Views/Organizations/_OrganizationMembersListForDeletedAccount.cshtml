@@ -1,4 +1,4 @@
-﻿@model DeleteOrganizationViewModel
+﻿@model IEnumerable<OrganizationMemberViewModel>
 
 <div class="row user-package-list align-left">
     <div class="col-md-12 align-left ">
@@ -13,11 +13,16 @@
                         </tr>
                     </thead>
                     <tbody>
-                        @foreach (var member in @Model.AdditionalMembers)
+                        @foreach (var member in Model)
                         {
                             <tr class="manage-package-listing">
                                 <td class="align-middle hidden-xs">
-                                    @GravatarHelper.Image(member.EmailAddress, 32)
+                                    @GravatarHelper.Image(
+                                        Url,
+                                        member.EmailAddress,
+                                        member.Username,
+                                        size: 32,
+                                        responsive: false)
                                 </td>
                                 <td class="align-middle package-id">
                                     <a href="@Url.User(member.Username)">@member.Username.Abbreviate(35)</a>

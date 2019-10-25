@@ -7,171 +7,128 @@ using System.Data.Entity;
 using System.Linq;
 using System.Threading.Tasks;
 using NuGet.Services.Entities;
+using NuGetGallery.Auditing;
 
 namespace NuGetGallery
 {
     public class PackageDeprecationService : IPackageDeprecationService
     {
-        private readonly IEntityRepository<PackageDeprecation> _deprecationRepository;
-        private readonly IEntityRepository<Cve> _cveRepository;
-        private readonly IEntityRepository<Cwe> _cweRepository;
+        private readonly IEntitiesContext _entitiesContext;
+        private readonly IPackageUpdateService _packageUpdateService;
+        private readonly ITelemetryService _telemetryService;
+        private readonly IAuditingService _auditingService;
 
         public PackageDeprecationService(
-           IEntityRepository<PackageDeprecation> deprecationRepository,
-           IEntityRepository<Cve> cveRepository,
-           IEntityRepository<Cwe> cweRepository)
+           IEntitiesContext entitiesContext,
+           IPackageUpdateService packageUpdateService,
+           ITelemetryService telemetryService,
+           IAuditingService auditingService)
         {
-            _deprecationRepository = deprecationRepository ?? throw new ArgumentNullException(nameof(deprecationRepository));
-            _cveRepository = cveRepository ?? throw new ArgumentNullException(nameof(cveRepository));
-            _cweRepository = cweRepository ?? throw new ArgumentNullException(nameof(cweRepository));
+            _entitiesContext = entitiesContext ?? throw new ArgumentNullException(nameof(entitiesContext));
+            _packageUpdateService = packageUpdateService ?? throw new ArgumentNullException(nameof(packageUpdateService));
+            _telemetryService = telemetryService ?? throw new ArgumentNullException(nameof(telemetryService));
+            _auditingService = auditingService ?? throw new ArgumentNullException(nameof(auditingService));
         }
 
         public async Task UpdateDeprecation(
-           IReadOnlyCollection<Package> packages,
+           IReadOnlyList<Package> packages,
            PackageDeprecationStatus status,
-           IReadOnlyCollection<Cve> cves,
-           decimal? cvssRating,
-           IReadOnlyCollection<Cwe> cwes,
            PackageRegistration alternatePackageRegistration,
            Package alternatePackage,
-           string customMessage)
+           string customMessage,
+           User user)
         {
+            if (user == null)
+            {
+                throw new ArgumentNullException(nameof(user));
+            }
+
             if (packages == null || !packages.Any())
             {
                 throw new ArgumentException(nameof(packages));
             }
 
-            if (cves == null)
+            var registration = packages.First().PackageRegistration;
+            if (packages.Select(p => p.PackageRegistrationKey).Distinct().Count() > 1)
             {
-                throw new ArgumentNullException(nameof(cves));
+                throw new ArgumentException("All packages to deprecate must have the same ID.", nameof(packages));
             }
 
-            if (cwes == null)
+            using (var strategy = new SuspendDbExecutionStrategy())
+            using (var transaction = _entitiesContext.GetDatabase().BeginTransaction())
             {
-                throw new ArgumentNullException(nameof(cwes));
-            }
+                var shouldDelete = status == PackageDeprecationStatus.NotDeprecated;
+                var deprecations = new List<PackageDeprecation>();
+                foreach (var package in packages)
+                {
+                    var deprecation = package.Deprecations.SingleOrDefault();
+                    if (shouldDelete)
+                    {
+                        if (deprecation != null)
+                        {
+                            package.Deprecations.Remove(deprecation);
+                            deprecations.Add(deprecation);
+                        }
+                    }
+                    else
+                    {
+                        if (deprecation == null)
+                        {
+                            deprecation = new PackageDeprecation
+                            {
+                                Package = package
+                            };
 
-            var shouldDelete = status == PackageDeprecationStatus.NotDeprecated;
-            var deprecations = new List<PackageDeprecation>();
-            foreach (var package in packages)
-            {
-                var deprecation = package.Deprecations.SingleOrDefault();
+                            package.Deprecations.Add(deprecation);
+                            deprecations.Add(deprecation);
+                        }
+
+                        deprecation.Status = status;
+                        deprecation.DeprecatedByUser = user;
+
+                        deprecation.AlternatePackageRegistration = alternatePackageRegistration;
+                        deprecation.AlternatePackage = alternatePackage;
+
+                        deprecation.CustomMessage = customMessage;
+                    }
+                }
+
                 if (shouldDelete)
                 {
-                    if (deprecation != null)
-                    {
-                        package.Deprecations.Remove(deprecation);
-                        deprecations.Add(deprecation);
-                    }
+                    _entitiesContext.Deprecations.RemoveRange(deprecations);
                 }
                 else
                 {
-                    if (deprecation == null)
-                    {
-                        deprecation = new PackageDeprecation
-                        {
-                            Package = package
-                        };
+                    _entitiesContext.Deprecations.AddRange(deprecations);
+                }
 
-                        package.Deprecations.Add(deprecation);
-                        deprecations.Add(deprecation);
-                    }
+                await _entitiesContext.SaveChangesAsync();
 
-                    deprecation.Status = status;
+                await _packageUpdateService.UpdatePackagesAsync(packages);
 
-                    deprecation.Cves.Clear();
-                    foreach (var cve in cves)
-                    {
-                        deprecation.Cves.Add(cve);
-                    }
+                transaction.Commit();
 
-                    deprecation.CvssRating = cvssRating;
+                _telemetryService.TrackPackageDeprecate(
+                    packages,
+                    status,
+                    alternatePackageRegistration,
+                    alternatePackage,
+                    !string.IsNullOrWhiteSpace(customMessage));
 
-                    deprecation.Cwes.Clear();
-                    foreach (var cwe in cwes)
-                    {
-                        deprecation.Cwes.Add(cwe);
-                    }
-
-                    deprecation.AlternatePackageRegistration = alternatePackageRegistration;
-                    deprecation.AlternatePackage = alternatePackage;
-
-                    deprecation.CustomMessage = customMessage;
+                foreach (var package in packages)
+                {
+                    await _auditingService.SaveAuditRecordAsync(
+                        new PackageAuditRecord(
+                            package,
+                            status == PackageDeprecationStatus.NotDeprecated ? AuditedPackageAction.Undeprecate : AuditedPackageAction.Deprecate,
+                            status == PackageDeprecationStatus.NotDeprecated ? PackageUndeprecatedVia.Web : PackageDeprecatedVia.Web));
                 }
             }
-
-            if (shouldDelete)
-            {
-                _deprecationRepository.DeleteOnCommit(deprecations);
-            }
-            else
-            {
-                _deprecationRepository.InsertOnCommit(deprecations);
-            }
-
-            await _deprecationRepository.CommitChangesAsync();
-        }
-
-        public async Task<IReadOnlyCollection<Cve>> GetOrCreateCvesByIdAsync(IEnumerable<string> ids, bool commitChanges)
-        {
-            if (ids == null)
-            {
-                throw new ArgumentNullException(nameof(ids));
-            }
-
-            var details = _cveRepository.GetAll()
-               .Where(c => ids.Contains(c.CveId))
-               .ToList();
-
-            var addedDetails = new List<Cve>();
-            foreach (var missingId in ids.Where(i => !details.Any(c => c.CveId == i)))
-            {
-                var detail = new Cve
-                {
-                    CveId = missingId,
-                    Listed = false,
-                    Status = CveStatus.Unknown
-                };
-                addedDetails.Add(detail);
-                details.Add(detail);
-            }
-
-            if (addedDetails.Any())
-            {
-                _cveRepository.InsertOnCommit(addedDetails);
-                if (commitChanges)
-                {
-                    await _cveRepository.CommitChangesAsync();
-                }
-            }
-
-            return details;
-        }
-
-        public IReadOnlyCollection<Cwe> GetCwesById(IEnumerable<string> ids)
-        {
-            if (ids == null)
-            {
-                throw new ArgumentNullException(nameof(ids));
-            }
-
-            var cwes = _cweRepository.GetAll()
-               .Where(c => ids.Contains(c.CweId))
-               .ToList();
-
-            if (ids.Any(i => !cwes.Any(c => i == c.CweId)))
-            {
-                throw new ArgumentException("Some IDs do not have a CWE associated with them!", nameof(ids));
-            }
-
-            return cwes;
         }
 
         public PackageDeprecation GetDeprecationByPackage(Package package)
         {
-            return _deprecationRepository.GetAll()
-                .Include(d => d.Cves)
-                .Include(d => d.Cwes)
+            return _entitiesContext.Deprecations
                 .Include(d => d.AlternatePackage.PackageRegistration)
                 .Include(d => d.AlternatePackageRegistration)
                 .SingleOrDefault(d => d.PackageKey == package.Key);

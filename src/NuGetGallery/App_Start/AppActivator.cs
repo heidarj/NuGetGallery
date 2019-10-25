@@ -17,12 +17,13 @@ using System.Web.UI;
 using Elmah;
 using Microsoft.WindowsAzure.Diagnostics;
 using Microsoft.WindowsAzure.ServiceRuntime;
-using NuGet.Services.Search.Client.Correlation;
 using NuGetGallery;
 using NuGetGallery.Configuration;
 using NuGetGallery.Diagnostics;
 using NuGetGallery.Infrastructure;
 using NuGetGallery.Infrastructure.Jobs;
+using NuGetGallery.Infrastructure.Lucene;
+using NuGetGallery.Infrastructure.Search.Correlation;
 using WebActivatorEx;
 using WebBackgrounder;
 
@@ -38,6 +39,8 @@ namespace NuGetGallery
 
         public static void PreStart()
         {
+            Trace.AutoFlush = true;
+
             MessageQueue.Enable(maxPerQueue: 1000);
 
             AntiForgeryConfig.UniqueClaimTypeIdentifier = ClaimTypes.NameIdentifier;
@@ -140,7 +143,7 @@ namespace NuGetGallery
             BundleTable.Bundles.Add(newStyleBundle);
 
             var scriptBundle = new ScriptBundle("~/Scripts/gallery/site.min.js")
-                .Include("~/Scripts/gallery/jquery-1.12.4.js")
+                .Include("~/Scripts/gallery/jquery-3.4.1.js")
                 .Include("~/Scripts/gallery/jquery.validate-1.16.0.js")
                 .Include("~/Scripts/gallery/jquery.validate.unobtrusive-3.2.6.js")
                 .Include("~/Scripts/gallery/knockout-3.4.2.js")
@@ -251,16 +254,17 @@ namespace NuGetGallery
             GlobalFilters.Filters.Add(new SendErrorsToTelemetryAttribute { View = "~/Views/Errors/InternalError.cshtml" });
             GlobalFilters.Filters.Add(new ReadOnlyModeErrorFilter());
             GlobalFilters.Filters.Add(new AntiForgeryErrorFilter());
+            GlobalFilters.Filters.Add(new UserDeletedErrorFilter());
             ValueProviderFactories.Factories.Add(new HttpHeaderValueProviderFactory());
         }
 
         private static void BackgroundJobsPostStart(IAppConfiguration configuration)
         {
-            var indexer = DependencyResolver.Current.GetService<IIndexingService>();
+            var indexingJobFactory = DependencyResolver.Current.GetService<IIndexingJobFactory>();
             var jobs = new List<IJob>();
-            if (indexer != null)
+            if (indexingJobFactory != null)
             {
-                indexer.RegisterBackgroundJobs(jobs, configuration);
+                indexingJobFactory.RegisterBackgroundJobs(jobs, configuration);
             }
 
             if (configuration.CollectPerfLogs)

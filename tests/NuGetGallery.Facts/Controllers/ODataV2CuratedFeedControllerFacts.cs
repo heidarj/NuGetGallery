@@ -26,22 +26,22 @@ namespace NuGetGallery.Controllers
 
         public class TheGetMethod
         {
-            private readonly CuratedFeed _curatedFeed;
             private readonly Package _curatedFeedPackage;
             private readonly Package _mainFeedPackage;
             private readonly FeatureConfiguration _featureConfiguration;
             private readonly Mock<IGalleryConfigurationService> _config;
             private readonly Mock<IAppConfiguration> _appConfig;
             private readonly Mock<ISearchService> _searchService;
-            private readonly Mock<IEntityRepository<Package>> _packages;
+            private readonly Mock<IReadOnlyEntityRepository<Package>> _packages;
             private readonly Mock<ITelemetryService> _telemetryService;
             private readonly ODataV2CuratedFeedController _target;
             private readonly HttpRequestMessage _request;
             private readonly ODataQueryOptions<V2FeedPackage> _options;
+            private readonly Mock<IEntityRepository<Package>> _readWritePackages;
+            private readonly Mock<IFeatureFlagService> _featureFlagService;
 
             public TheGetMethod()
             {
-                _curatedFeed = new CuratedFeed { Name = _curatedFeedName };
                 _curatedFeedPackage = new Package
                 {
                     PackageRegistration = new PackageRegistration
@@ -61,8 +61,10 @@ namespace NuGetGallery.Controllers
 
                 _config = new Mock<IGalleryConfigurationService>();
                 _searchService = new Mock<ISearchService>();
-                _packages = new Mock<IEntityRepository<Package>>();
+                _packages = new Mock<IReadOnlyEntityRepository<Package>>();
                 _telemetryService = new Mock<ITelemetryService>();
+                _readWritePackages = new Mock<IEntityRepository<Package>>();
+                _featureFlagService = new Mock<IFeatureFlagService>();
 
                 _config
                     .Setup(x => x.Current)
@@ -76,12 +78,17 @@ namespace NuGetGallery.Controllers
                 _packages
                     .Setup(x => x.GetAll())
                     .Returns(() => new[] { _mainFeedPackage }.AsQueryable());
+                _featureFlagService
+                    .Setup(ff => ff.IsODataDatabaseReadOnlyEnabled())
+                    .Returns(true);
 
                 _target = new ODataV2CuratedFeedController(
                     _config.Object,
                     _searchService.Object,
                     _packages.Object,
-                    _telemetryService.Object);
+                    _readWritePackages.Object,
+                    _telemetryService.Object,
+                    _featureFlagService.Object);
 
                 _request = new HttpRequestMessage(HttpMethod.Get, $"{_siteRoot}/api/v2/curated-feed/{_curatedFeedName}/Packages");
                 _options = new ODataQueryOptions<V2FeedPackage>(CreateODataQueryContext<V2FeedPackage>(), _request);
@@ -440,11 +447,48 @@ namespace NuGetGallery.Controllers
             Assert.Equal(AvailablePackages.Where(p => !p.IsPrerelease).Count(), searchCount);
         }
 
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public void TestReadOnlyFeatureFlag(bool readOnly)
+        {
+            var packagesRepositoryMock = new Mock<IReadOnlyEntityRepository<Package>>();
+            var readWritePackagesRepositoryMock = new Mock<IEntityRepository<Package>>();
+            var configurationService = new Mock<IGalleryConfigurationService>().Object;
+            var searchService = new Mock<ISearchService>().Object;
+            var telemetryService = new Mock<ITelemetryService>().Object;
+            var featureFlagServiceMock = new Mock<IFeatureFlagService>();
+            featureFlagServiceMock.Setup(ffs => ffs.IsODataDatabaseReadOnlyEnabled()).Returns(readOnly);
+
+            var testController = new ODataV2CuratedFeedController(
+                configurationService,
+                searchService,
+                packagesRepositoryMock.Object,
+                readWritePackagesRepositoryMock.Object,
+                telemetryService,
+                featureFlagServiceMock.Object);
+
+            var pacakges = testController.GetAll();
+
+            if (readOnly)
+            {
+                packagesRepositoryMock.Verify(r => r.GetAll(), times: Times.Exactly(1));
+                readWritePackagesRepositoryMock.Verify(r => r.GetAll(), times: Times.Never);
+            }
+            else
+            {
+                packagesRepositoryMock.Verify(r => r.GetAll(), times: Times.Never);
+                readWritePackagesRepositoryMock.Verify(r => r.GetAll(), times: Times.Exactly(1));
+            }
+        }
+
         protected override ODataV2CuratedFeedController CreateController(
-            IEntityRepository<Package> packagesRepository,
+            IReadOnlyEntityRepository<Package> packagesRepository,
+            IEntityRepository<Package> readWritePackagesRepository,
             IGalleryConfigurationService configurationService,
             ISearchService searchService,
-            ITelemetryService telemetryService)
+            ITelemetryService telemetryService,
+            IFeatureFlagService featureFlagService)
         {
             configurationService.Current.RedirectedCuratedFeeds = new[] { _curatedFeedName };
 
@@ -452,7 +496,9 @@ namespace NuGetGallery.Controllers
                 configurationService,
                 searchService,
                 packagesRepository,
-                telemetryService);
+                readWritePackagesRepository,
+                telemetryService,
+                featureFlagService);
         }
 
         private static IDbSet<T> GetQueryableMockDbSet<T>(params T[] sourceList) where T : class

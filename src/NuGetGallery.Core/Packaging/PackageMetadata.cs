@@ -14,7 +14,7 @@ namespace NuGetGallery.Packaging
     public class PackageMetadata
     {
         /// <summary>
-        /// These are properties generated in the V3 pipeline (feed2catalog job) and could collide if the .nuspec
+        /// These are properties generated in the V3 pipeline (db2catalog job) and could collide if the .nuspec
         /// itself also contains these properties.
         /// </summary>
         private static readonly HashSet<string> RestrictedMetadataElements = new HashSet<string>
@@ -95,10 +95,12 @@ namespace NuGetGallery.Packaging
             Description = GetValue(PackageMetadataStrings.Description, (string)null);
             ReleaseNotes = GetValue(PackageMetadataStrings.ReleaseNotes, (string)null);
             RequireLicenseAcceptance = GetValue(PackageMetadataStrings.RequireLicenseAcceptance, false);
+            DevelopmentDependency = GetValue(PackageMetadataStrings.DevelopmentDependency, false);
             Summary = GetValue(PackageMetadataStrings.Summary, (string)null);
             Title = GetValue(PackageMetadataStrings.Title, (string)null);
             Tags = GetValue(PackageMetadataStrings.Tags, (string)null);
             Language = GetValue(PackageMetadataStrings.Language, (string)null);
+            IconFile = GetValue(PackageMetadataStrings.Icon, (string)null);
 
             Owners = GetValue(PackageMetadataStrings.Owners, (string)null);
 
@@ -118,6 +120,7 @@ namespace NuGetGallery.Packaging
         public string Description { get; private set; }
         public string ReleaseNotes { get; private set; }
         public bool RequireLicenseAcceptance { get; private set; }
+        public bool DevelopmentDependency { get; private set; }
         public string Summary { get; private set; }
         public string Title { get; private set; }
         public string Tags { get; private set; }
@@ -131,6 +134,12 @@ namespace NuGetGallery.Packaging
         /// Null if no 'license' node present.
         /// </summary>
         public LicenseMetadata LicenseMetadata { get; }
+
+        /// <summary>
+        /// Contains the embedded icon filename taken from the 'icon' node of the nuspec file.
+        /// Null if not specified.
+        /// </summary>
+        public string IconFile { get; private set; }
 
         public string GetValueFromMetadata(string key)
         {
@@ -154,8 +163,7 @@ namespace NuGetGallery.Packaging
 
         private string GetValue(string key, string alternateValue)
         {
-            string value;
-            if (_metadata.TryGetValue(key, out value))
+            if (_metadata.TryGetValue(key, out var value))
             {
                 return value;
             }

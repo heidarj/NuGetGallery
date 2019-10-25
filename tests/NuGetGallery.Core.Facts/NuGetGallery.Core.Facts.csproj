@@ -10,7 +10,7 @@
     <AppDesignerFolder>Properties</AppDesignerFolder>
     <RootNamespace>NuGetGallery</RootNamespace>
     <AssemblyName>NuGetGallery.Core.Facts</AssemblyName>
-    <TargetFrameworkVersion>v4.6.2</TargetFrameworkVersion>
+    <TargetFrameworkVersion>v4.7.2</TargetFrameworkVersion>
     <FileAlignment>512</FileAlignment>
     <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
     <TargetFrameworkProfile />
@@ -80,8 +80,8 @@
     <Compile Include="Certificates\CertificateFileFacts.cs" />
     <Compile Include="Cookies\CookieComplianceServiceBaseFacts.cs" />
     <Compile Include="Features\FeatureFlagClientExtensionsFacts.cs" />
-    <Compile Include="Features\FeatureFlagFileStorageServiceFacts.cs" />
-    <Compile Include="Features\FeatureFlagJsonHelper.cs" />
+    <Compile Include="Features\EditableFeatureFlagFileStorageServiceFacts.cs" />
+    <Compile Include="GitHub\GitHubUsageConfigurationFacts.cs" />
     <Compile Include="Infrastructure\ElmahExceptionFacts.cs" />
     <Compile Include="Extensions\UserExtensionsCoreFacts.cs" />
     <Compile Include="Infrastructure\Mail\Messages\MarkdownMessageBuilderFacts.cs" />
@@ -101,7 +101,11 @@
     <Compile Include="Services\CoreLicenseFileServiceFacts.cs" />
     <Compile Include="Services\CoreSymbolPackageServiceFacts.cs" />
     <Compile Include="Services\FileUriPermissionsFacts.cs" />
+    <Compile Include="Services\FolderNamesDataAttribute.cs" />
+    <Compile Include="Services\FolderNamesDataAttributeFacts.cs" />
+    <Compile Include="Services\GalleryCloudBlobContainerInformationProviderFacts.cs" />
     <Compile Include="Services\RevalidationStateServiceFacts.cs" />
+    <Compile Include="Services\StringReplaceTemplateProcessorFacts.cs" />
     <Compile Include="TestUtils\BlobStorageCollection.cs" />
     <Compile Include="TestUtils\BlobStorageFact.cs" />
     <Compile Include="TestUtils\BlobStorageFixture.cs" />
@@ -146,7 +150,7 @@
       <Version>2.3.1</Version>
     </PackageReference>
     <PackageReference Include="xunit.runner.visualstudio">
-      <Version>2.3.1</Version>
+      <Version>2.4.1</Version>
       <IncludeAssets>runtime; build; native; contentfiles</IncludeAssets>
       <ExcludeAssets>analyzers</ExcludeAssets>
       <PrivateAssets>all</PrivateAssets>

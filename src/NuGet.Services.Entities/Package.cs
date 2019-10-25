@@ -5,7 +5,6 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
-using System.Linq;
 
 namespace NuGet.Services.Entities
 {
@@ -158,6 +157,8 @@ namespace NuGet.Services.Entities
 
         public bool RequiresLicenseAcceptance { get; set; }
 
+        public bool DevelopmentDependency { get; set; }
+
         /// <remarks>
         ///     Has a max length of 4000. Is not indexed and not used for searches. Db column is nvarchar(max).
         /// </remarks>
@@ -217,9 +218,11 @@ namespace NuGet.Services.Entities
         public string MinClientVersion { get; set; }
 
         /// <summary>
-        /// The logged in user when this package version was created.
-        /// NULL for older packages.
+        /// The user that uploaded this package or <c>null</c> if the user was deleted.
         /// </summary>
+        /// <remarks>
+        /// Packages uploaded before this field was added have <c>null</c>.
+        /// </remarks>
         public User User { get; set; }
         public int? UserKey { get; set; }
 
@@ -271,5 +274,10 @@ namespace NuGet.Services.Entities
         /// See <see cref="PackageDeprecation.AlternatePackage"/>.
         /// </summary>
         public virtual ICollection<PackageDeprecation> AlternativeOf { get; set; }
+
+        /// <summary>
+        /// A flag that indicates that the package metadata had an embedded icon specified.
+        /// </summary>
+        public bool HasEmbeddedIcon { get; set; }
     }
 }

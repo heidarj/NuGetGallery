@@ -26,7 +26,7 @@ namespace NuGetGallery.Authentication
         {
             return new Credential(
                 CredentialTypes.Password.Sha1,
-                LegacyHasher.GenerateHash(plaintextPassword, GalleryConstants.Sha1HashAlgorithmId));
+                LegacyHasher.GenerateHash(plaintextPassword, ServicesConstants.Sha1HashAlgorithmId));
         }
 
         public static Credential CreateV1ApiKey(Guid apiKey, TimeSpan? expiration)
@@ -77,9 +77,14 @@ namespace NuGetGallery.Authentication
             return CreateApiKey(CredentialTypes.ApiKey.VerifyV1, GuidToApiKey(apiKey), TimeSpan.FromDays(1));
         }
 
-        public static Credential CreateExternalCredential(string value, string tenantId = null)
+        public static Credential CreateExternalMSACredential(string value)
         {
-            return new Credential { Type = CredentialTypes.External.MicrosoftAccount, Value = value, TenantId = tenantId };
+            return new Credential { Type = CredentialTypes.External.MicrosoftAccount, Value = value, TenantId = "MSA" };
+        }
+
+        public static Credential CreateExternalAADCredential(string value, string tenantId)
+        {
+            return new Credential { Type = CredentialTypes.External.AzureActiveDirectoryAccount, Value = value, TenantId = tenantId };
         }
 
         internal static Credential CreateApiKey(string type, string apiKey, TimeSpan? expiration)

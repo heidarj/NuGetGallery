@@ -2,7 +2,6 @@
 // Licensed under the Apache License, Version 2.0. See License.txt in the project root for license information.
 
 using System;
-using System.Linq;
 using System.Threading.Tasks;
 using System.Web;
 using Moq;
@@ -43,6 +42,11 @@ namespace NuGetGallery.Services
                 Assert.False(typosquattingConfiguration.IsCheckEnabled);
                 Assert.False(typosquattingConfiguration.IsBlockUsersEnabled);
                 Assert.Equal(TyposquattingConfiguration.DefaultPackageIdChecklistCacheExpireTimeInHours, typosquattingConfiguration.PackageIdChecklistCacheExpireTimeInHours);
+
+                var abTestConfiguration = service.ABTestConfiguration as ABTestConfiguration;
+
+                Assert.Equal(0, abTestConfiguration.PreviewSearchPercentage);
+                Assert.Equal(0, abTestConfiguration.PreviewHijackPercentage);
             }
 
             [Fact]
@@ -62,9 +66,6 @@ namespace NuGetGallery.Services
                 var alwaysEnabledForDomains = new[] { "a" };
                 var alwaysEnabledForEmailAddresses = new[] { "b" };
 
-                var packageIdChecklistLength = 20000;
-                var packageIdChecklistCacheExpireTimeInHours = 12.0;
-
                 var certificatesConfiguration = new CertificatesConfiguration(
                     isUIEnabledByDefault,
                     alwaysEnabledForDomains,
@@ -76,6 +77,9 @@ namespace NuGetGallery.Services
                     alwaysEnabledForDomains: alwaysEnabledForDomains,
                     alwaysEnabledForEmailAddresses: alwaysEnabledForEmailAddresses);
                 var symbolsJson = JsonConvert.SerializeObject(symbolsConfiguration);
+                
+                var packageIdChecklistLength = 20000;
+                var packageIdChecklistCacheExpireTimeInHours = 12.0;
 
                 var typosquattingConfiguration = new TyposquattingConfiguration(
                     packageIdChecklistLength: packageIdChecklistLength,
@@ -84,23 +88,35 @@ namespace NuGetGallery.Services
                     packageIdChecklistCacheExpireTimeInHours: packageIdChecklistCacheExpireTimeInHours);
                 var typosquattingJson = JsonConvert.SerializeObject(typosquattingConfiguration);
 
+                var previewSearchPercentage = 2;
+                var previewHijackPercentage = 4;
+
+                var abTestConfiguration = new ABTestConfiguration(
+                    previewSearchPercentage,
+                    previewHijackPercentage);
+                var abTestJson = JsonConvert.SerializeObject(abTestConfiguration);
+
                 var contentService = GetMock<IContentService>();
 
                 contentService
-                    .Setup(x => x.GetContentItemAsync(GalleryConstants.ContentNames.LoginDiscontinuationConfiguration, It.IsAny<TimeSpan>()))
+                    .Setup(x => x.GetContentItemAsync(ServicesConstants.ContentNames.LoginDiscontinuationConfiguration, It.IsAny<TimeSpan>()))
                     .Returns(Task.FromResult<IHtmlString>(new HtmlString(loginJson)));
 
                 contentService
-                    .Setup(x => x.GetContentItemAsync(GalleryConstants.ContentNames.CertificatesConfiguration, It.IsAny<TimeSpan>()))
+                    .Setup(x => x.GetContentItemAsync(ServicesConstants.ContentNames.CertificatesConfiguration, It.IsAny<TimeSpan>()))
                     .Returns(Task.FromResult<IHtmlString>(new HtmlString(certificatesJson)));
 
                 contentService
-                    .Setup(x => x.GetContentItemAsync(GalleryConstants.ContentNames.SymbolsConfiguration, It.IsAny<TimeSpan>()))
+                    .Setup(x => x.GetContentItemAsync(ServicesConstants.ContentNames.SymbolsConfiguration, It.IsAny<TimeSpan>()))
                     .Returns(Task.FromResult<IHtmlString>(new HtmlString(symbolsJson)));
 
                 contentService
-                    .Setup(x => x.GetContentItemAsync(GalleryConstants.ContentNames.TyposquattingConfiguration, It.IsAny<TimeSpan>()))
+                    .Setup(x => x.GetContentItemAsync(ServicesConstants.ContentNames.TyposquattingConfiguration, It.IsAny<TimeSpan>()))
                     .Returns(Task.FromResult<IHtmlString>(new HtmlString(typosquattingJson)));
+
+                contentService
+                    .Setup(x => x.GetContentItemAsync(ServicesConstants.ContentNames.ABTestConfiguration, It.IsAny<TimeSpan>()))
+                    .Returns(Task.FromResult<IHtmlString>(new HtmlString(abTestJson)));
 
                 var service = GetService<ContentObjectService>();
 
@@ -111,6 +127,7 @@ namespace NuGetGallery.Services
                 certificatesConfiguration = service.CertificatesConfiguration as CertificatesConfiguration;
                 symbolsConfiguration = service.SymbolsConfiguration as SymbolsConfiguration;
                 typosquattingConfiguration = service.TyposquattingConfiguration as TyposquattingConfiguration;
+                abTestConfiguration = service.ABTestConfiguration as ABTestConfiguration;
 
                 // Assert
                 Assert.Equal(emails, loginDiscontinuationConfiguration.DiscontinuedForEmailAddresses);
@@ -130,6 +147,9 @@ namespace NuGetGallery.Services
                 Assert.True(typosquattingConfiguration.IsCheckEnabled);
                 Assert.True(typosquattingConfiguration.IsBlockUsersEnabled);
                 Assert.Equal(packageIdChecklistCacheExpireTimeInHours, typosquattingConfiguration.PackageIdChecklistCacheExpireTimeInHours);
+
+                Assert.Equal(previewSearchPercentage, abTestConfiguration.PreviewSearchPercentage);
+                Assert.Equal(previewHijackPercentage, abTestConfiguration.PreviewHijackPercentage);
             }
         }
     }

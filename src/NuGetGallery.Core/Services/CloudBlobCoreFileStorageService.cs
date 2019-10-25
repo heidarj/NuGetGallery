@@ -13,13 +13,14 @@ using Microsoft.WindowsAzure.Storage;
 using Microsoft.WindowsAzure.Storage.Blob;
 using Microsoft.WindowsAzure.Storage.Blob.Protocol;
 using NuGetGallery.Diagnostics;
+using LogLevel = Microsoft.Extensions.Logging.LogLevel;
 
 namespace NuGetGallery
 {
     public class CloudBlobCoreFileStorageService : ICoreFileStorageService
     {
         /// <summary>
-        /// This is the maximum duration for <see cref="CopyFileAsync(string, string, string, string)"/> to poll,
+        /// This is the maximum duration for <see cref="CopyFileAsync(ISimpleCloudBlob, string, string, IAccessCondition)"/> to poll,
         /// waiting for a package copy to complete. The value picked today is based off of the maximum duration we wait
         /// when uploading files to Azure China blob storage. Note that in cases when the copy source and destination
         /// are in the same container, the copy completed immediately and no polling is necessary.
@@ -27,34 +28,19 @@ namespace NuGetGallery
         private static readonly TimeSpan MaxCopyDuration = TimeSpan.FromMinutes(10);
         private static readonly TimeSpan CopyPollFrequency = TimeSpan.FromMilliseconds(500);
 
-        private static readonly HashSet<string> KnownPublicFolders = new HashSet<string> {
-            CoreConstants.Folders.PackagesFolderName,
-            CoreConstants.Folders.PackageBackupsFolderName,
-            CoreConstants.Folders.DownloadsFolderName,
-            CoreConstants.Folders.SymbolPackagesFolderName,
-            CoreConstants.Folders.SymbolPackageBackupsFolderName,
-            CoreConstants.Folders.FlatContainerFolderName,
-        };
-
-        private static readonly HashSet<string> KnownPrivateFolders = new HashSet<string> {
-            CoreConstants.Folders.ContentFolderName,
-            CoreConstants.Folders.UploadsFolderName,
-            CoreConstants.Folders.PackageReadMesFolderName,
-            CoreConstants.Folders.ValidationFolderName,
-            CoreConstants.Folders.UserCertificatesFolderName,
-            CoreConstants.Folders.RevalidationFolderName,
-            CoreConstants.Folders.StatusFolderName,
-            CoreConstants.Folders.PackagesContentFolderName,
-        };
-
         protected readonly ICloudBlobClient _client;
         protected readonly IDiagnosticsSource _trace;
+        protected readonly ICloudBlobContainerInformationProvider _cloudBlobFolderInformationProvider;
         protected readonly ConcurrentDictionary<string, ICloudBlobContainer> _containers = new ConcurrentDictionary<string, ICloudBlobContainer>();
 
-        public CloudBlobCoreFileStorageService(ICloudBlobClient client, IDiagnosticsService diagnosticsService)
+        public CloudBlobCoreFileStorageService(
+            ICloudBlobClient client,
+            IDiagnosticsService diagnosticsService,
+            ICloudBlobContainerInformationProvider cloudBlobFolderInformationProvider)
         {
             _client = client ?? throw new ArgumentNullException(nameof(client));
             _trace = diagnosticsService?.SafeGetSource(nameof(CloudBlobCoreFileStorageService)) ?? throw new ArgumentNullException(nameof(diagnosticsService));
+            _cloudBlobFolderInformationProvider = cloudBlobFolderInformationProvider ?? throw new ArgumentNullException(nameof(cloudBlobFolderInformationProvider));
         }
 
         public async Task DeleteFileAsync(string folderName, string fileName)
@@ -183,8 +169,8 @@ namespace NuGetGallery
             if (!await srcBlob.ExistsAsync())
             {
                 _trace.TraceEvent(
-                    TraceEventType.Warning,
-                    id: 0,
+                    LogLevel.Warning,
+                    eventId: 0,
                     message: $"Before calling FetchAttributesAsync(), the source blob '{srcBlob.Name}' does not exist.");
             }
 
@@ -195,6 +181,8 @@ namespace NuGetGallery
             // Check if the destination blob already exists and fetch attributes.
             if (await destBlob.ExistsAsync())
             {
+                var sourceBlobMetadata = srcBlob.Metadata;
+                var destinationBlobMetadata = destBlob.Metadata;
                 if (destBlob.CopyState?.Status == CopyStatus.Failed)
                 {
                     // If the last copy failed, allow this copy to occur no matter what the caller's destination
@@ -202,32 +190,49 @@ namespace NuGetGallery
                     // of the failed blob to avoid inadvertently replacing a blob that is now valid (i.e. has a
                     // successful copy status).
                     _trace.TraceEvent(
-                        TraceEventType.Information,
-                        id: 0,
+                        LogLevel.Information,
+                        eventId: 0,
                         message: $"Destination blob '{destFolderName}/{destFileName}' already exists but has a " +
                         $"failed copy status. This blob will be replaced if the etag matches '{destBlob.ETag}'.");
 
                     mappedDestAccessCondition = AccessCondition.GenerateIfMatchCondition(destBlob.ETag);
                 }
-                else if ((srcBlob.Properties.ContentMD5 != null
-                     && srcBlob.Properties.ContentMD5 == destBlob.Properties.ContentMD5
-                     && srcBlob.Properties.Length == destBlob.Properties.Length))
+                else if (sourceBlobMetadata != null && destinationBlobMetadata != null)
                 {
-                    // If the blob hash is the same and the length is the same, no-op the copy.
-                    _trace.TraceEvent(
-                        TraceEventType.Information,
-                        id: 0,
-                        message: $"Destination blob '{destFolderName}/{destFileName}' already has hash " +
-                        $"'{destBlob.Properties.ContentMD5}' and length '{destBlob.Properties.Length}'. The copy " +
-                        $"will be skipped.");
+                    var sourceBlobHasSha512Hash = sourceBlobMetadata.TryGetValue(CoreConstants.Sha512HashAlgorithmId, out var sourceBlobSha512Hash);
+                    var destinationBlobHasSha512Hash = destinationBlobMetadata.TryGetValue(CoreConstants.Sha512HashAlgorithmId, out var destinationBlobSha512Hash);
+                    if (!sourceBlobHasSha512Hash)
+                    {
+                        _trace.TraceEvent(
+                           LogLevel.Information,
+                           eventId: 0,
+                           message: $"Source blob ('{srcBlob.Uri.ToString()}') doesn't have the Sha512 hash.");
+                    }
+                    if (!destinationBlobHasSha512Hash)
+                    {
+                        _trace.TraceEvent(
+                           LogLevel.Information,
+                           eventId: 0,
+                           message: $"Destination blob ('{destBlob.Uri.ToString()}') doesn't have the Sha512 hash.");
+                    }
+                    if (sourceBlobHasSha512Hash && destinationBlobHasSha512Hash && sourceBlobSha512Hash == destinationBlobSha512Hash && srcBlob.Properties.Length == destBlob.Properties.Length)
+                    {
+                        // If the blob Sha512 hash is the same and the length is the same, no-op the copy.
+                        _trace.TraceEvent(
+                            LogLevel.Information,
+                            eventId: 0,
+                            message: $"Destination blob '{destFolderName}/{destFileName}' already has Sha512 hash " +
+                            $"'{destinationBlobSha512Hash}' and length '{destBlob.Properties.Length}'. The copy " +
+                            $"will be skipped.");
 
-                    return srcBlob.ETag;
+                        return srcBlob.ETag;
+                    }
                 }
             }
 
             _trace.TraceEvent(
-                TraceEventType.Information,
-                id: 0,
+                LogLevel.Information,
+                eventId: 0,
                 message: $"Copying of source blob '{srcBlob.Uri}' to '{destFolderName}/{destFileName}' with source " +
                 $"access condition {Log(srcAccessCondition)} and destination access condition " +
                 $"{Log(mappedDestAccessCondition)}.");
@@ -260,8 +265,8 @@ namespace NuGetGallery
                 if (!await destBlob.ExistsAsync())
                 {
                     _trace.TraceEvent(
-                        TraceEventType.Warning,
-                        id: 0,
+                        LogLevel.Warning,
+                        eventId: 0,
                         message: $"Before calling FetchAttributesAsync(), the destination blob '{destBlob.Name}' does not exist.");
                 }
 
@@ -548,18 +553,7 @@ namespace NuGetGallery
 
         private bool IsPublicContainer(string folderName)
         {
-            if (KnownPublicFolders.Contains(folderName))
-            {
-                return true;
-            }
-
-            if (KnownPrivateFolders.Contains(folderName))
-            {
-                return false;
-            }
-
-            throw new InvalidOperationException(
-                string.Format(CultureInfo.CurrentCulture, "The folder name {0} is not supported.", folderName));
+            return _cloudBlobFolderInformationProvider.IsPublicContainer(folderName);
         }
 
         private async Task<StorageResult> GetBlobContentAsync(string folderName, string fileName, string ifNoneMatch = null)
@@ -611,68 +605,14 @@ namespace NuGetGallery
             return new StorageResult(HttpStatusCode.OK, stream, blob.ETag);
         }
 
-        private static string GetContentType(string folderName)
+        private string GetContentType(string folderName)
         {
-            switch (folderName)
-            {
-                case CoreConstants.Folders.PackagesFolderName:
-                case CoreConstants.Folders.PackageBackupsFolderName:
-                case CoreConstants.Folders.UploadsFolderName:
-                case CoreConstants.Folders.ValidationFolderName:
-                case CoreConstants.Folders.SymbolPackagesFolderName:
-                case CoreConstants.Folders.SymbolPackageBackupsFolderName:
-                case CoreConstants.Folders.FlatContainerFolderName:
-                    return CoreConstants.PackageContentType;
-
-                case CoreConstants.Folders.DownloadsFolderName:
-                    return CoreConstants.OctetStreamContentType;
-
-                case CoreConstants.Folders.PackageReadMesFolderName:
-                    return CoreConstants.TextContentType;
-
-                case CoreConstants.Folders.ContentFolderName:
-                case CoreConstants.Folders.RevalidationFolderName:
-                case CoreConstants.Folders.StatusFolderName:
-                    return CoreConstants.JsonContentType;
-
-                case CoreConstants.Folders.UserCertificatesFolderName:
-                    return CoreConstants.CertificateContentType;
-
-                case CoreConstants.Folders.PackagesContentFolderName:
-                    return CoreConstants.OctetStreamContentType;
-
-                default:
-                    throw new InvalidOperationException(
-                        string.Format(CultureInfo.CurrentCulture, "The folder name {0} is not supported.", folderName));
-            }
+            return _cloudBlobFolderInformationProvider.GetContentType(folderName);
         }
 
-        private static string GetCacheControl(string folderName)
+        private string GetCacheControl(string folderName)
         {
-            switch (folderName)
-            {
-                case CoreConstants.Folders.PackagesFolderName:
-                case CoreConstants.Folders.SymbolPackagesFolderName:
-                case CoreConstants.Folders.ValidationFolderName:
-                    return CoreConstants.DefaultCacheControl;
-
-                case CoreConstants.Folders.PackageBackupsFolderName:
-                case CoreConstants.Folders.UploadsFolderName:
-                case CoreConstants.Folders.SymbolPackageBackupsFolderName:
-                case CoreConstants.Folders.DownloadsFolderName:
-                case CoreConstants.Folders.PackageReadMesFolderName:
-                case CoreConstants.Folders.ContentFolderName:
-                case CoreConstants.Folders.RevalidationFolderName:
-                case CoreConstants.Folders.StatusFolderName:
-                case CoreConstants.Folders.UserCertificatesFolderName:
-                case CoreConstants.Folders.PackagesContentFolderName:
-                case CoreConstants.Folders.FlatContainerFolderName:
-                    return null;
-
-                default:
-                    throw new InvalidOperationException(
-                        string.Format(CultureInfo.CurrentCulture, "The folder name {0} is not supported.", folderName));
-            }
+            return _cloudBlobFolderInformationProvider.GetCacheControl(folderName);
         }
 
         private async Task<ICloudBlobContainer> PrepareContainer(string folderName, bool isPublic)
